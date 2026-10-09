@@ -185,6 +185,7 @@
     if (seq !== loadSeq) return;
     st.stores = r.stores; renderStores(r.stores);
     if (r.pending && attempt < 6) { areaStatus(t('storesLoading')); storeRetry = setTimeout(() => loadStores(seq, attempt + 1), 4000); }
+    else if (r.osmUnavailable) { areaStatus(t('storesUnavailable')); if (attempt < 8) storeRetry = setTimeout(() => loadStores(seq, attempt + 1), 75000); }
     else areaStatus(r.limited ? t('storesLimited') : null);
   }
   const inRadius = p => {

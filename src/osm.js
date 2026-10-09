@@ -30,7 +30,8 @@ function chainFor(tags) {
 }
 function overpassQuery([s, w, n, e]) {
   const b = `${s},${w},${n},${e}`;
-  return `[out:json][timeout:60];(nwr["shop"="supermarket"](${b});nwr["shop"="convenience"]["brand"](${b}););out center tags;`;
+  // Small declared timeout/maxsize: Overpass admits small requests first when it is busy (it sheds load with 504s).
+  return `[out:json][timeout:25][maxsize:67108864];(nwr["shop"="supermarket"](${b});nwr["shop"="convenience"]["brand"](${b}););out center tags;`;
 }
 function elementToStore(el, now) {
   const t = el.tags || {};
@@ -68,9 +69,11 @@ function createOsm(opts = {}) {
   const state = new Map();     // tile -> { status: 'ok'|'error', fetchedAt, nextTry }  (mirrors osm_tiles; avoids DB reads)
   const inflight = new Map();  // tile -> Promise
   const ipHits = new Map();    // ip -> [timestamps]
-  let queue = Promise.resolve(), lastRequestAt = 0, cooldownUntil = 0;
+  let queue = Promise.resolve(), lastRequestAt = 0;
+  const cooldown = new Map(); // endpoint -> time before which we don't call it again (after 429/504)
+  const BACKOFF_MIN = [1, 3, 10, 30, 60]; // minutes before retrying a failed tile (grows with repeated failures)
   const day = { key: '', n: 0 };
-  const stats = { requests: 0, failures: 0, storesUpserted: 0 };
+  const stats = { requests: 0, failures: 0, storesUpserted: 0, lastError: null, lastErrorAt: null };
 
   function fresh(st, now) {
     if (!st) return false;
@@ -99,20 +102,21 @@ function createOsm(opts = {}) {
   async function request(query) {
     let lastErr;
     for (const url of o.endpoints) {
-      const wait = Math.max(lastRequestAt + o.minIntervalMs, cooldownUntil) - Date.now();
+      if ((cooldown.get(url) || 0) > Date.now()) { lastErr = new Error('Overpass busy (cooling down)'); continue; }
+      const wait = lastRequestAt + o.minIntervalMs - Date.now();
       if (wait > 0) await sleep(wait);
       lastRequestAt = Date.now(); day.n++; stats.requests++;
       try {
         const res = await o.fetch(url, {
-          method: 'POST', body: 'data=' + encodeURIComponent(query), signal: AbortSignal.timeout(65000),
+          method: 'POST', body: 'data=' + encodeURIComponent(query), signal: AbortSignal.timeout(35000),
           headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': o.userAgent, Accept: 'application/json' },
         });
-        if (res.status === 429 || res.status === 504) { cooldownUntil = Date.now() + 60e3; throw new Error(`Overpass ${res.status}`); }
+        if (res.status === 429 || res.status === 504) { cooldown.set(url, Date.now() + 60e3); throw new Error(`Overpass ${res.status}`); }
         if (!res.ok) throw new Error(`Overpass ${res.status}`);
         const j = await res.json();
         if (!Array.isArray(j.elements)) throw new Error('Overpass: bad response');
         return j.elements;
-      } catch (e) { lastErr = e; o.log(`Overpass ${url} failed: ${e.message}`); }
+      } catch (e) { lastErr = e; stats.lastError = `${new URL(url).host}: ${e.message}`.slice(0, 200); stats.lastErrorAt = new Date().toISOString(); o.log(`Overpass ${url} failed: ${e.message}`); }
     }
     throw lastErr || new Error('no Overpass endpoints');
   }
@@ -132,8 +136,10 @@ function createOsm(opts = {}) {
       o.log(`OSM tile ${key}: ${unique.length} stores`);
     } catch (e) {
       stats.failures++;
-      const nextTry = new Date(Date.now() + 15 * 60e3).toISOString();
-      state.set(key, { status: 'error', nextTry });
+      if (!/Overpass|fetch|abort|timeout/i.test(e.message)) { stats.lastError = `store write: ${e.message}`.slice(0, 200); stats.lastErrorAt = new Date().toISOString(); }
+      const fails = ((state.get(key) || {}).fails || 0) + 1;
+      const nextTry = new Date(Date.now() + BACKOFF_MIN[Math.min(fails, BACKOFF_MIN.length) - 1] * 60e3).toISOString();
+      state.set(key, { status: 'error', nextTry, fails });
       await o.db.run(`INSERT INTO osm_tiles (tile,status,next_try_at) VALUES (?,?,?)
         ON CONFLICT(tile) DO UPDATE SET status=CASE WHEN osm_tiles.fetched_at IS NULL THEN 'error' ELSE osm_tiles.status END, next_try_at=excluded.next_try_at`, [key, 'error', nextTry]).catch(() => {});
       if (state.get(key).status === 'error') o.log(`OSM tile ${key} failed: ${e.message}`);
@@ -160,15 +166,17 @@ function createOsm(opts = {}) {
     for (const k of keys) {
       if (inflight.has(k)) { waits.push(inflight.get(k)); continue; }
       if (fresh(state.get(k), now)) continue;
+      // a failed tile whose backoff has expired but that has old data: keep serving the old data, refresh it below
       if (started >= o.maxNewTilesPerRequest) { limited = true; continue; }
       if (!dailyAllowed() || !ipAllowed(ip)) { limited = true; break; }
       started++; waits.push(schedule(k));
     }
-    if (!waits.length) return { pending: false, limited };
+    const failing = () => keys.some(k => (state.get(k) || {}).status === 'error');
+    if (!waits.length) return { pending: false, limited, unavailable: failing() };
     let timer;
     const done = await Promise.race([Promise.all(waits).then(() => true), new Promise(r => { timer = setTimeout(() => r(false), o.waitMs); })]);
     clearTimeout(timer);
-    return { pending: !done || limited && started > 0, limited };
+    return { pending: !done || limited && started > 0, limited, unavailable: done && failing() };
   }
   return { ensure, stats, state, options: o };
 }

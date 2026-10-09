@@ -18,6 +18,7 @@
       attribution: 'Map and store data © {osm} contributors (ODbL).',
       locateHint: 'Showing the latest posts worldwide. Tap 📍 or search for a place to see reductions near you.',
       locating: 'Finding your location…', storesLoading: 'Loading supermarkets for this area from OpenStreetMap…',
+      storesUnavailable: 'OpenStreetMap is busy right now, so some supermarkets for this area are missing. Trying again shortly.',
       storesLimited: 'Some supermarkets for this area will load later (OpenStreetMap fair-use limits).',
       allGoneBadge: 'ALL GONE', newBadge: 'NEW', photoAlt: 'Photo of reduced items',
       posted: 'Posted {ago} ({when}) by {author} · seen {seen}', km: ' · {km} km', edited: ' · edited',

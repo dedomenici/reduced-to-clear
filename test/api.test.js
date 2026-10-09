@@ -384,6 +384,18 @@ test('Overpass client: per-IP and daily caps, request spacing, error backoff', a
   const bad = createOsm({ db, fetch: async () => { fails++; return new Response('busy', { status: 500 }); }, endpoints: ['x'], minIntervalMs: 0 });
   await bad.ensure(30.1, 30.1, 0.5, 'b'); await bad.ensure(30.1, 30.1, 0.5, 'b');
   assert.strictEqual(fails, 1, 'failed tile is not retried immediately');
+  assert.strictEqual((await bad.ensure(30.1, 30.1, 0.5, 'b')).unavailable, true, 'client is told OSM is unavailable');
+  const st1 = bad.state.get(require('../src/osm').tileOf(30.1, 30.1).join(':'));
+  assert.ok(Date.parse(st1.nextTry) - Date.now() <= 60e3 + 1000, 'first backoff is short (1 min)');
+  st1.nextTry = new Date(0).toISOString(); await bad.ensure(30.1, 30.1, 0.5, 'b');
+  assert.strictEqual(fails, 2); assert.ok(Date.parse(bad.state.get(require('../src/osm').tileOf(30.1, 30.1).join(':')).nextTry) - Date.now() > 2 * 60e3, 'backoff grows');
+  // a 504 on one endpoint cools that endpoint down but the next endpoint is tried straight away
+  const hits = [];
+  const busy = createOsm({ db, endpoints: ['https://a.test/i', 'https://b.test/i'], minIntervalMs: 0,
+    fetch: async (url) => { hits.push(url); return url.includes('a.test') ? new Response('busy', { status: 504 }) : new Response('{"elements":[]}', { status: 200 }); } });
+  const t0 = Date.now(); await busy.ensure(40.1, 40.1, 0.5, 'c');
+  assert.ok(Date.now() - t0 < 3000, 'no long wait after a 504'); assert.deepStrictEqual(hits, ['https://a.test/i', 'https://b.test/i']);
+  await busy.ensure(41.1, 41.1, 0.5, 'c'); assert.strictEqual(hits.filter(h => h.includes('a.test')).length, 1, 'busy endpoint skipped while cooling down');
   assert.strictEqual((await db.get("SELECT status FROM osm_tiles WHERE tile = ?", [require('../src/osm').tileOf(30.1, 30.1).join(':')])).status, 'error');
   const off = createOsm({ db, fetch: ok, enabled: false }); assert.deepStrictEqual(await off.ensure(1, 1, 1), { pending: false, enabled: false });
 });

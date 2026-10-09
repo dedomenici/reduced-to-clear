@@ -170,7 +170,7 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
   app.get('/api/config', (req, res) => res.json({ chainsByCountry: config.chainsByCountry, photosEnabled, maxPhotoBytes: config.limits.maxPhotoBytes,
     attribution: { text: ATTRIBUTION, url: ATTRIBUTION_URL },
     // non-secret diagnostics (behind the gate): lets the owner confirm what the host's env actually turned on
-    server: { schema: db.schemaVersion, db: db.kind, photoStorage, photosEnabledFrom: opts.photosEnabled !== undefined ? 'option' : config.photosEnabledFrom, osmOnDemand: osm.options.enabled } }));
+    server: { schema: db.schemaVersion, db: db.kind, photoStorage, photosEnabledFrom: opts.photosEnabled !== undefined ? 'option' : config.photosEnabledFrom, osmOnDemand: osm.options.enabled, osm: osm.stats } }));
   // Offline lookup (no external calls): country, time zone and currency for a point, plus the chain list for that country.
   app.get('/api/geo', (req, res) => {
     const lat = Number(req.query.lat), lng = Number(req.query.lng);
@@ -339,7 +339,7 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
       .filter(s => s.distance_km <= radius).sort((a, b) => a.distance_km - b.distance_km).slice(0, 400);
     const seen = await seenTimesFor(stores.map(s => s.id));
     res.json({ stores: stores.map(s => ({ ...s, prediction: predict.predictStore(s, predict.nowDow(s.timezone, at), seen.get(s.id), chainRows) })),
-      pending: !!area.pending, limited: !!area.limited, attribution: ATTRIBUTION });
+      pending: !!area.pending, limited: !!area.limited, osmUnavailable: !!area.unavailable, attribution: ATTRIBUTION });
   });
   app.get('/api/stores/:id/predictions', async (req, res) => {
     const s = await db.get('SELECT * FROM stores WHERE id = ?', [Number(req.params.id)]);
