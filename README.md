@@ -18,7 +18,7 @@ Research behind it (data sources, chain reduction times, legal notes): [RESEARCH
 - **Stores anywhere, from OpenStreetMap on demand** (© OpenStreetMap contributors, ODbL; attributed on the map and in the feed). When someone looks at an area the app hasn't seen, the server fetches `shop=supermarket` (plus branded `shop=convenience`) for the surrounding 0.25° tiles from the Overpass API and caches them in the database (`osm_tiles`, refreshed after 30 days). The client shows "Loading supermarkets…" and asks again while a fetch is running. Fair use, per the Overpass guidelines (https://dev.overpass-api.de/overpass-doc/en/preface/commons.html: about 10,000 requests and 1 GB per day at most):
   - one request at a time with a 2 s gap; at most 4 new tiles per page load; 30 new tiles per IP per hour; 500 Overpass requests per day in total
   - a failed tile is retried after 1, 3, 10, 30, then 60 minutes; an endpoint that answers 429 or 504 (load shedding) is skipped for 60 s and the next endpoint is tried. Queries declare a small `[timeout:25][maxsize:64MiB]` so busy servers admit them sooner. If OSM is unavailable the page says so and retries.
-  - a `User-Agent: ReducedToClear/1.0 (+<site URL>)` header; a fallback endpoint (kumi.systems)
+  - a `User-Agent: ReducedToClear/1.0 (+<site URL>)` header; fallback public instances (maps.mail.ru, private.coffee, kumi.systems) tried in order. An endpoint that's unreachable is skipped for 5 minutes. On 9 Oct 2026, overpass-api.de refused connections from Render, so the live site uses the fallbacks.
   - The same guidelines say that an app for the general public shouldn't rely on the public Overpass servers as its backend. That's fine for this private prototype with caching, but see "Before going public".
   - ~1,800 London stores are still seeded on first start so London works with no Overpass calls. Posts at a store of the same chain within 150 m are attached to that store; otherwise a new store is created.
 - **Offline geography.** Country from `@rapideditor/country-coder` (boundary data bundled), time zone from `@photostructure/tz-lookup`, currency from a CLDR-derived table (`seeds/country-currency.json`, rebuilt with `node scripts/build-currency.js`). No external lookups. At sea the country is `ZZ` and the currency `XXX`.
@@ -67,7 +67,7 @@ Environment settings (see `.env.example`):
 | `MAX_PHOTO_KB` | 300 | Per-photo cap, measured after metadata is stripped. |
 | `PHOTO_RETENTION_DAYS` | 30 | Older photos are deleted (the post stays). |
 | `OSM_ON_DEMAND` | on | `false` turns off on-demand Overpass fetching. |
-| `OVERPASS_URLS` | overpass-api.de, overpass.kumi.systems | Comma-separated endpoints, tried in order. |
+| `OVERPASS_URLS` | overpass-api.de, maps.mail.ru (VK), overpass.private.coffee, overpass.kumi.systems | Comma-separated public Overpass endpoints, tried in order. |
 | `OVERPASS_MIN_INTERVAL_MS` / `OVERPASS_DAILY_MAX` / `OSM_NEW_TILES_PER_IP_HOUR` | 2000 / 500 / 30 | Rate limits. |
 | `OSM_CACHE_DAYS` / `OSM_WAIT_MS` | 30 / 8000 | Tile refresh age, and how long `/api/stores` waits for a fetch before answering "pending". |
 | `PUBLIC_URL` | `RENDER_EXTERNAL_URL` | Used in the Overpass User-Agent. |

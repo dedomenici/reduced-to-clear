@@ -8,7 +8,7 @@ const { overpassQuery, elementToStore, UPSERT } = require('../src/osm');
 const args = Object.fromEntries(process.argv.slice(2).reduce((a, v, i, arr) => (v.startsWith('--') ? a.concat([[v.slice(2), arr[i + 1]]]) : a), []));
 const box = (args.bbox || '51.28,-0.51,51.69,0.33').split(',').map(Number);
 (async () => {
-  const endpoints = (process.env.OVERPASS_URLS || 'https://overpass-api.de/api/interpreter,https://overpass.kumi.systems/api/interpreter').split(',');
+  const endpoints = (process.env.OVERPASS_URLS || 'https://overpass-api.de/api/interpreter,https://maps.mail.ru/osm/tools/overpass/api/interpreter,https://overpass.private.coffee/api/interpreter,https://overpass.kumi.systems/api/interpreter').split(',');
   let res;
   for (const url of endpoints) {
     res = await fetch(url, {

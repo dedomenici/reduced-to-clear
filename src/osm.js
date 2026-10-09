@@ -55,7 +55,7 @@ function createOsm(opts = {}) {
   const env = process.env;
   const o = {
     enabled: opts.enabled ?? env.OSM_ON_DEMAND !== 'false',
-    endpoints: opts.endpoints || (env.OVERPASS_URLS || 'https://overpass-api.de/api/interpreter,https://overpass.kumi.systems/api/interpreter').split(',').map(s => s.trim()).filter(Boolean),
+    endpoints: opts.endpoints || (env.OVERPASS_URLS || 'https://overpass-api.de/api/interpreter,https://maps.mail.ru/osm/tools/overpass/api/interpreter,https://overpass.private.coffee/api/interpreter,https://overpass.kumi.systems/api/interpreter').split(',').map(s => s.trim()).filter(Boolean),
     userAgent: opts.userAgent || `ReducedToClear/1.0 (+${env.PUBLIC_URL || env.RENDER_EXTERNAL_URL || 'https://reduced-to-clear.onrender.com'})`,
     minIntervalMs: opts.minIntervalMs ?? Number(env.OVERPASS_MIN_INTERVAL_MS || 2000),
     dailyMax: opts.dailyMax ?? Number(env.OVERPASS_DAILY_MAX || 500),
@@ -116,7 +116,9 @@ function createOsm(opts = {}) {
         const j = await res.json();
         if (!Array.isArray(j.elements)) throw new Error('Overpass: bad response');
         return j.elements;
-      } catch (e) { lastErr = e; const host = new URL(url).host; stats.lastError = `${host}: ${e.message}`.slice(0, 200); stats.lastErrorAt = new Date().toISOString(); stats.endpointErrors[host] = { error: (e.message + (e.cause ? ` (${e.cause.code || ''} ${e.cause.message || ''})` : '')).slice(0, 200), at: stats.lastErrorAt }; o.log(`Overpass ${url} failed: ${e.message}`); }
+      } catch (e) {
+        if (e.cause && /ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ECONNRESET/.test(e.cause.code || '')) cooldown.set(url, Date.now() + 5 * 60e3); // unreachable from here: skip for 5 min
+        lastErr = e; const host = new URL(url).host; stats.lastError = `${host}: ${e.message}`.slice(0, 200); stats.lastErrorAt = new Date().toISOString(); stats.endpointErrors[host] = { error: (e.message + (e.cause ? ` (${e.cause.code || ''} ${e.cause.message || ''})` : '')).slice(0, 200), at: stats.lastErrorAt }; o.log(`Overpass ${url} failed: ${e.message}`); }
     }
     throw lastErr || new Error('no Overpass endpoints');
   }
