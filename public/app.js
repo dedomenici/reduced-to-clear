@@ -286,20 +286,30 @@
   $('#photo-camera').onchange = e => setPhoto(e.target.files[0]);
   $('#photo-gallery').onchange = e => setPhoto(e.target.files[0]);
   async function shrinkPhoto(file) {
-    // Re-encode via canvas: resizes and strips EXIF (incl. GPS) before upload.
+    // Re-encode via canvas: resizes, strips EXIF (incl. GPS) and fits the server's size cap (default 300KB)
+    // by stepping JPEG quality down, then dimensions, until it fits.
     if (!file || !file.size) return null;
+    const maxBytes = (st.cfg && st.cfg.maxPhotoBytes) || 300 * 1024;
     const img = await createImageBitmap(file).catch(() => null); if (!img) return file;
-    const scale = Math.min(1, 1600 / Math.max(img.width, img.height));
-    const c = document.createElement('canvas'); c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
-    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-    return new Promise(res => c.toBlob(b => res(b), 'image/jpeg', 0.82));
+    let dim = 1280;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const scale = Math.min(1, dim / Math.max(img.width, img.height));
+      const c = document.createElement('canvas'); c.width = Math.round(img.width * scale); c.height = Math.round(img.height * scale);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      for (const q of [0.82, 0.7, 0.6, 0.5]) {
+        const blob = await new Promise(res => c.toBlob(b => res(b), 'image/jpeg', q));
+        if (blob && blob.size <= maxBytes) return blob;
+      }
+      dim = Math.round(dim * 0.75);
+    }
+    throw new Error('Could not shrink photo enough, try another');
   }
   $('#post-form').onsubmit = async e => {
     e.preventDefault(); const f = e.target; $('#post-err').textContent = '';
     const fd = new FormData(f); fd.delete('seen_local');
     fd.set('seen_at', new Date(f.seen_local.value).toISOString());
-    const photo = await shrinkPhoto(st.photoFile); if (photo) fd.set('photo', photo, 'photo.jpg');
     try {
+      const photo = await shrinkPhoto(st.photoFile); if (photo) fd.set('photo', photo, 'photo.jpg');
       const { post } = await api('/api/posts', { method: 'POST', body: fd });
       post.mine = true; inRadius(post); st.posts.set(post.id, post); renderAll(); $('#dlg-post').close(); setSheet(true);
     } catch (err) { $('#post-err').textContent = err.message; }

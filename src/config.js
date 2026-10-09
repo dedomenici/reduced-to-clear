@@ -20,6 +20,7 @@ if (tursoUrl && !tursoUrl.startsWith('file:') && !tursoToken) fail('TURSO_DATABA
 // Hosted mode = remote DB or running on a hosting platform. In hosted mode nothing secret is written to disk.
 const hosted = (!!tursoUrl && !tursoUrl.startsWith('file:')) || !!env.RENDER || !!env.RAILWAY_ENVIRONMENT || env.HOSTED === 'true';
 
+const PHOTO_STORAGE = env.PHOTO_STORAGE === 'db' || env.PHOTO_STORAGE === 'disk' ? env.PHOTO_STORAGE : (tursoUrl ? 'db' : 'disk');
 const DATA_DIR = path.resolve(ROOT, env.DATA_DIR || 'data');
 function secret() {
   if (env.SITE_SECRET) return env.SITE_SECRET;
@@ -39,8 +40,12 @@ module.exports = {
   tursoUrl, tursoToken,
   sitePassword: env.SITE_PASSWORD,
   siteSecret: secret(),
-  // Photo uploads need persistent file storage. Off unless PHOTOS_ENABLED=true (free hosting has no persistent disk).
-  photosEnabled: env.PHOTOS_ENABLED === 'true',
+  // Photos: PHOTO_STORAGE 'db' (BLOBs in the database — default when Turso is configured) or 'disk' (UPLOADS_DIR).
+  // DB storage needs no disk, so photos are ON by default with it (set PHOTOS_ENABLED=false to turn off).
+  // Disk storage needs persistent storage, so it stays OFF unless PHOTOS_ENABLED=true.
+  photoStorage: PHOTO_STORAGE,
+  photosEnabled: PHOTO_STORAGE === 'db' ? env.PHOTOS_ENABLED !== 'false' : env.PHOTOS_ENABLED === 'true',
+  photoRetentionDays: Number(env.PHOTO_RETENTION_DAYS || 30),
   uploadsDir: path.resolve(ROOT, env.UPLOADS_DIR || (env.DATA_DIR ? path.join(DATA_DIR, 'uploads') : 'uploads')),
   seedStoresFile: path.join(ROOT, 'seeds', 'stores-london.json'),
   // International expansion: add countries/cities here.
@@ -48,5 +53,6 @@ module.exports = {
     GB: { name: 'United Kingdom', currency: 'GBP', currencySymbol: '£', timezone: 'Europe/London',
           cities: { London: { lat: 51.5072, lng: -0.1276, timezone: 'Europe/London' } } },
   },
-  limits: { postsPerHour: 10, goneMarksPerHour: 30, maxPhotoBytes: 5 * 1024 * 1024 },
+  // Photos are shrunk in the browser to fit maxPhotoBytes; the server enforces the cap (300KB keeps Turso storage small).
+  limits: { postsPerHour: 10, goneMarksPerHour: 30, maxPhotoBytes: Number(env.MAX_PHOTO_KB || 300) * 1024 },
 };

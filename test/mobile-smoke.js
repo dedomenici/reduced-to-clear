@@ -7,7 +7,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex');
 
 (async () => {
-  const srv = await tempServer({ env: { PHOTOS_ENABLED: 'true' } });
+  const srv = await tempServer({ env: { PHOTOS_ENABLED: 'true', PHOTO_STORAGE: 'db' } }); // hosted-style: photos as DB BLOBs
   const browser = await puppeteer.launch({ executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox'] });
   const results = {}; const errors = [];
   try {
@@ -60,7 +60,10 @@ const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000
     await page.waitForFunction(() => document.querySelector('#feed').textContent.includes('Mobile test: meal deals'), { timeout: 8000 });
     await sleep(500);
     results.sheetOpensAfterPost = await page.$eval('#sheet', s => s.classList.contains('open'));
-    results.postHasPhoto = await page.evaluate(() => !!document.querySelector('#feed .post img'));
+    results.postHasPhoto = await page.evaluate(async () => {
+      const img = document.querySelector('#feed .post img'); if (!img) return false;
+      const r = await fetch(img.src); const ok = img.src.includes('/photos/') && r.ok && /^image\/(jpeg|png|webp)$/.test(r.headers.get('content-type')) && /immutable/.test(r.headers.get('cache-control')); return ok || [img.src, r.status, r.headers.get('content-type')].join(' ');
+    });
     await page.screenshot({ path: 'test/screenshot-mobile-sheet.png' });
     // tap handle collapses sheet
     await page.tap('#sheet-handle'); await sleep(400);
@@ -74,7 +77,7 @@ const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000
   console.log(JSON.stringify(results, null, 1));
   const bad = !results.gateShown || !results.manifest.ok || !results.iconsOk || !results.noHorizontalScroll || !results.mapFullWidth || !results.sheetCollapsed
     || !results.fabVisible || results.smallTouchTargets.length || !results.formFullScreen || results.cameraInput.capture !== 'environment'
-    || !results.formInputsNoZoom || !results.sheetOpensAfterPost || !results.sheetToggles || !results.postHasPhoto || errors.length;
+    || !results.formInputsNoZoom || !results.sheetOpensAfterPost || !results.sheetToggles || results.postHasPhoto !== true || errors.length;
   if (bad) { console.error('MOBILE SMOKE FAILED'); process.exit(1); }
   console.log('MOBILE SMOKE PASSED');
 })().catch(e => { console.error('MOBILE SMOKE FAILED:', e.message); process.exit(1); });

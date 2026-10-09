@@ -37,6 +37,9 @@ const MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS stores_latlng ON stores(lat, lng);
    CREATE INDEX IF NOT EXISTS posts_latlng ON posts(lat, lng);
    CREATE INDEX IF NOT EXISTS actions_user_kind ON actions(user_id, kind, at);`,
+  // 3: photos stored in the database (BLOB), so hosted/free deployments don't need a disk
+  `CREATE TABLE IF NOT EXISTS photos (
+     id TEXT PRIMARY KEY, mime TEXT NOT NULL, bytes INTEGER NOT NULL, data BLOB NOT NULL, created_at TEXT NOT NULL);`,
 ];
 
 async function migrate(db) {

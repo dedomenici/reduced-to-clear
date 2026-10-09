@@ -29,7 +29,7 @@ async function gate(who) { await req(who, 'POST', '/gate', { form: new URLSearch
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex');
 
 test.before(async () => {
-  app = await createApp({ dbFile: ':memory:', tursoUrl: process.env.TEST_TURSO_URL || '', photosEnabled: true, quiet: true });
+  app = await createApp({ dbFile: ':memory:', tursoUrl: process.env.TEST_TURSO_URL || '', photosEnabled: true, photoStorage: 'db', quiet: true });
   await new Promise(r => { server = app.listen(0, r); });
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -147,6 +147,81 @@ test('predictions: chain seeds + learned per-store histogram', async () => {
   assert.match(r.data.note, /PREDICTIONS/);
 });
 
+const FIX = f => fs.readFileSync(path.join(__dirname, 'fixtures', f));
+async function postPhoto(who, buf, type, name = 'p.jpg') {
+  const fd = new FormData(); fd.set('chain', 'Waitrose'); fd.set('items', 'photo test ' + name); fd.set('lat', '51.53'); fd.set('lng', '-0.12');
+  fd.set('photo', new Blob([buf], { type }), name);
+  return req(who, 'POST', '/api/posts', { form: fd });
+}
+
+test('photos in the database: EXIF/GPS stripped, size cap, gated cached route, deleted with post', async () => {
+  await gate('carol');
+  await req('carol', 'POST', '/api/register', { json: { email: 'carol@example.com', password: 'password3', displayName: 'Carol' } });
+  const cfg = (await req('carol', 'GET', '/api/config')).data;
+  assert.strictEqual(cfg.photosEnabled, true); assert.strictEqual(cfg.maxPhotoBytes, 300 * 1024);
+
+  const jpg = FIX('exif.jpg'); assert.ok(jpg.includes('Exif') && jpg.includes('secret'));
+  let r = await postPhoto('carol', jpg, 'image/jpeg');
+  assert.strictEqual(r.status, 201, JSON.stringify(r.data));
+  const url = r.data.post.photo_url; const pid = r.data.post.id;
+  assert.match(url, /^\/photos\/[a-f0-9]{24}$/);
+  const key = url.split('/').pop();
+  const row = await app.locals.db.get('SELECT mime, bytes FROM photos WHERE id = ?', [key]);
+  assert.strictEqual(row.mime, 'image/jpeg'); assert.ok(row.bytes < jpg.length);
+
+  // gated
+  assert.strictEqual((await fetch(base + url)).status, 401);
+  const got = await fetch(base + url, { headers: { Cookie: jar.carol } });
+  assert.strictEqual(got.status, 200); assert.strictEqual(got.headers.get('content-type'), 'image/jpeg');
+  assert.match(got.headers.get('cache-control'), /private, max-age=31536000, immutable/);
+  const body = Buffer.from(await got.arrayBuffer());
+  assert.ok(body[0] === 0xff && body[1] === 0xd8 && body.at(-2) === 0xff && body.at(-1) === 0xd9, 'still a valid JPEG');
+  for (const needle of ['Exif', 'secret', 'TestCam', 'hidden comment']) assert.ok(!body.includes(needle), needle + ' stripped');
+  const etag = got.headers.get('etag');
+  assert.strictEqual((await fetch(base + url, { headers: { Cookie: jar.carol, 'If-None-Match': etag } })).status, 304);
+
+  // PNG text chunks stripped
+  r = await postPhoto('carol', FIX('text.png'), 'image/png', 'p.png'); assert.strictEqual(r.status, 201);
+  const png = Buffer.from(await (await fetch(base + r.data.post.photo_url, { headers: { Cookie: jar.carol } })).arrayBuffer());
+  assert.ok(!png.includes('secret place')); assert.ok(png.includes('IEND'));
+
+  // not an image (type sniffed from bytes, not the claimed mime)
+  r = await postPhoto('carol', Buffer.from('<script>alert(1)</script>'), 'image/jpeg'); assert.strictEqual(r.status, 400);
+  // over the 300KB cap (padding in kept APP2 segments)
+  const pad = Buffer.alloc(60000 + 4); pad[0] = 0xff; pad[1] = 0xe2; pad.writeUInt16BE(60002, 2);
+  const big = Buffer.concat([jpg.subarray(0, 2), ...Array(6).fill(pad), jpg.subarray(2)]);
+  r = await postPhoto('carol', big, 'image/jpeg'); assert.strictEqual(r.status, 400); assert.match(r.data.error, /too large/);
+  // ...but metadata that gets stripped doesn't count against the cap
+  const exifPad = Buffer.alloc(40000 + 4); exifPad[0] = 0xff; exifPad[1] = 0xe1; exifPad.writeUInt16BE(40002, 2);
+  r = await postPhoto('carol', Buffer.concat([jpg.subarray(0, 2), ...Array(8).fill(exifPad), jpg.subarray(2)]), 'image/jpeg');
+  assert.strictEqual(r.status, 201, JSON.stringify(r.data));
+
+  // deleting the post deletes the photo
+  r = await req('carol', 'DELETE', `/api/posts/${pid}`); assert.strictEqual(r.status, 200);
+  assert.strictEqual(await app.locals.db.get('SELECT id FROM photos WHERE id = ?', [key]), undefined);
+  assert.strictEqual((await fetch(base + url, { headers: { Cookie: jar.carol } })).status, 404);
+});
+
+test('photo retention prunes old photos but keeps posts', async () => {
+  const db = app.locals.db;
+  const r = await postPhoto('carol', FIX('exif.jpg'), 'image/jpeg', 'old.jpg'); assert.strictEqual(r.status, 201);
+  const key = r.data.post.photo_url.split('/').pop();
+  await db.run('UPDATE posts SET created_at = ? WHERE id = ?', [new Date(Date.now() - 40 * 864e5).toISOString(), r.data.post.id]);
+  assert.ok(await app.locals.prunePhotos() >= 1);
+  assert.strictEqual(await db.get('SELECT id FROM photos WHERE id = ?', [key]), undefined);
+  assert.strictEqual((await db.get('SELECT photo FROM posts WHERE id = ?', [r.data.post.id])).photo, null);
+});
+
+test('photo defaults: DB storage (Turso) => on by default; disk => off unless PHOTOS_ENABLED=true', () => {
+  const { spawnSync } = require('child_process');
+  const run = extra => JSON.parse(spawnSync(process.execPath, ['-e', "const c=require('./src/config');console.log(JSON.stringify([c.photoStorage,c.photosEnabled]))"],
+    { cwd: config.ROOT, encoding: 'utf8', env: { ...process.env, SITE_PASSWORD: 'x', SITE_SECRET: 's', PHOTOS_ENABLED: '', PHOTO_STORAGE: '', TURSO_DATABASE_URL: '', TURSO_AUTH_TOKEN: '', ...extra } }).stdout);
+  assert.deepStrictEqual(run({ TURSO_DATABASE_URL: 'libsql://x.turso.io', TURSO_AUTH_TOKEN: 't' }), ['db', true]);
+  assert.deepStrictEqual(run({ TURSO_DATABASE_URL: 'libsql://x.turso.io', TURSO_AUTH_TOKEN: 't', PHOTOS_ENABLED: 'false' }), ['db', false]);
+  assert.deepStrictEqual(run({}), ['disk', false]);
+  assert.deepStrictEqual(run({ PHOTOS_ENABLED: 'true' }), ['disk', true]);
+});
+
 test('photos disabled: upload UI flag off, posts accepted, file parts ignored', async () => {
   const app2 = await createApp({ dbFile: ':memory:', tursoUrl: '', photosEnabled: false, quiet: true, seedStoresFile: null });
   const srv2 = await new Promise(r => { const s = app2.listen(0, () => r(s)); });
@@ -165,7 +240,7 @@ test('photos disabled: upload UI flag off, posts accepted, file parts ignored', 
     const j = await r.json();
     assert.strictEqual(r.status, 201, JSON.stringify(j)); assert.strictEqual(j.post.photo_url, null);
     assert.strictEqual(fs.readdirSync(config.uploadsDir).length, before, 'no file written');
-    const up = await fetch(b2 + '/uploads/anything.jpg', { headers: { Cookie: cookie } }); assert.strictEqual(up.status, 404);
+    const up = await fetch(b2 + '/photos/aaaaaaaaaaaaaaaaaaaaaaaa', { headers: { Cookie: cookie } }); assert.strictEqual(up.status, 404);
   } finally { srv2.close(); }
 });
 

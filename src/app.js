@@ -8,6 +8,7 @@ const fs = require('fs');
 const config = require('./config');
 const { openDb } = require('./db');
 const predict = require('./predict');
+const photos = require('./photos');
 const seeds = require('../seeds/chain-predictions.json');
 
 const CHAINS = ['Tesco', "Sainsbury's", 'Asda', 'Morrisons', 'Co-op', 'M&S', 'Waitrose', 'Lidl', 'Aldi', 'Iceland', 'Other'];
@@ -51,16 +52,17 @@ async function seedStores(db, file) {
 
 async function createApp(opts = {}) {
   const photosEnabled = opts.photosEnabled !== undefined ? opts.photosEnabled : config.photosEnabled;
-  if (photosEnabled) fs.mkdirSync(config.uploadsDir, { recursive: true });
+  const photoStorage = opts.photoStorage || config.photoStorage;
   const db = await openDb({
     file: opts.dbFile || config.dbFile,
     tursoUrl: opts.tursoUrl !== undefined ? opts.tursoUrl : config.tursoUrl,
     tursoToken: opts.tursoToken !== undefined ? opts.tursoToken : config.tursoToken,
   });
+  const photoStore = photos.createPhotoStore({ db, mode: photoStorage, uploadsDir: config.uploadsDir });
   const chainRows = await seedPredictions(db); // cached: static between deploys
   const seeded = await seedStores(db, opts.seedStoresFile === undefined ? config.seedStoresFile : opts.seedStoresFile);
   if (!opts.quiet) {
-    console.log(`DB: ${db.kind} (schema v${db.schemaVersion}) · photos ${photosEnabled ? 'enabled' : 'disabled'} · ${config.hosted ? 'hosted' : 'local'} mode`);
+    console.log(`DB: ${db.kind} (schema v${db.schemaVersion}) · photos ${photosEnabled ? 'enabled (' + photoStorage + ')' : 'disabled'} · ${config.hosted ? 'hosted' : 'local'} mode`);
     if (seeded) console.log(`Seeded ${seeded} stores from ${path.basename(config.seedStoresFile)} (© OpenStreetMap contributors, ODbL)`);
   }
   const app = express();
@@ -107,13 +109,24 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
   });
   app.use((req, res, next) => {
     if (req.cookies.rtc_gate === gateToken) return next();
-    if (req.path.startsWith('/api/') || req.path.startsWith('/uploads/')) return res.status(401).json({ error: 'site_locked' });
+    if (req.path.startsWith('/api/') || req.path.startsWith('/photos/')) return res.status(401).json({ error: 'site_locked' });
     return res.redirect('/gate');
   });
 
   // ---------- Static (behind gate) ----------
   app.use(express.static(path.join(config.ROOT, 'public')));
-  if (photosEnabled) app.use('/uploads', express.static(config.uploadsDir, { maxAge: '7d' }));
+
+  // Photos (behind the gate). Keys are random and content never changes, so cache hard in the browser only.
+  app.get('/photos/:key', async (req, res) => {
+    const key = req.params.key;
+    if (!photos.KEY_RE.test(key)) return res.status(404).end();
+    const etag = `"${key}"`;
+    res.set({ 'Cache-Control': 'private, max-age=31536000, immutable', ETag: etag });
+    if (req.headers['if-none-match'] === etag) return res.status(304).end();
+    const photo = await photoStore.get(key);
+    if (!photo) { res.set('Cache-Control', 'no-store'); return res.status(404).end(); }
+    res.type(photo.mime).set('Content-Length', String(photo.data.length)).send(photo.data);
+  });
 
   // ---------- Accounts ----------
   async function currentUser(req) {
@@ -160,7 +173,7 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
     res.clearCookie('rtc_session'); res.json({ ok: true });
   });
   app.get('/api/me', (req, res) => res.json({ user: req.user }));
-  app.get('/api/config', (req, res) => res.json({ countries: config.countries, chains: CHAINS, photosEnabled }));
+  app.get('/api/config', (req, res) => res.json({ countries: config.countries, chains: CHAINS, photosEnabled, maxPhotoBytes: config.limits.maxPhotoBytes }));
 
   // ---------- Live updates (SSE) ----------
   const clients = new Set();
@@ -181,7 +194,7 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
       u.display_name AS author, g.display_name AS gone_by_name
     FROM posts p JOIN stores s ON s.id = p.store_id JOIN users u ON u.id = p.user_id LEFT JOIN users g ON g.id = p.all_gone_by`;
   function shapePost(p, req, lat, lng) {
-    const out = { ...p, mine: !!(req.user && req.user.id === p.user_id), photo_url: p.photo && photosEnabled ? '/uploads/' + p.photo : null };
+    const out = { ...p, mine: !!(req.user && req.user.id === p.user_id), photo_url: photosEnabled ? photoStore.url(p.photo) : null };
     delete out.photo;
     if (lat != null) out.distance_km = Math.round(kmBetween(lat, lng, p.lat, p.lng) * 100) / 100;
     return out;
@@ -205,20 +218,12 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
     res.json({ posts: rows });
   });
 
-  // Photo uploads: stored on disk only when PHOTOS_ENABLED=true (needs persistent storage).
-  // When disabled, multipart posts are still accepted and any file part is silently ignored.
-  const imageTypes = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' };
-  const upload = multer(photosEnabled ? {
-    storage: multer.diskStorage({
-      destination: config.uploadsDir,
-      filename: (req, file, cb) => cb(null, crypto.randomBytes(12).toString('hex') + (imageTypes[file.mimetype] || '')),
-    }),
-    limits: { fileSize: config.limits.maxPhotoBytes, files: 1 },
-    fileFilter: (req, file, cb) => cb(null, !!imageTypes[file.mimetype]),
-  } : {
+  // Photo uploads are held in memory, validated, metadata-stripped, then saved to the photo store (DB BLOB or disk).
+  // When photos are disabled, multipart posts are still accepted and any file part is silently discarded.
+  const upload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: config.limits.maxPhotoBytes, files: 1 },
-    fileFilter: (req, file, cb) => cb(null, false), // discard
+    limits: { fileSize: config.limits.maxPhotoBytes + 64 * 1024, files: 1 }, // small slack for metadata that gets stripped
+    fileFilter: (req, file, cb) => cb(null, photosEnabled),
   });
 
   async function findOrCreateStore(body, userId) {
@@ -243,8 +248,7 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
 
   app.post('/api/posts', requireUser, upload.single('photo'), async (req, res) => {
     const b = req.body || {};
-    const photoFile = photosEnabled && req.file ? req.file : null;
-    const fail = (code, error) => { if (photoFile) fs.unlink(photoFile.path, () => {}); res.status(code).json({ error }); };
+    const fail = (code, error) => res.status(code).json({ error });
     const items = clean(b.items, 1000);
     const lat = Number(b.lat), lng = Number(b.lng);
     if (!items) return fail(400, 'Say what items are reduced');
@@ -254,11 +258,16 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
     if (isNaN(seenAt)) return fail(400, 'Invalid time');
     if (seenAt > new Date(Date.now() + 5 * 60e3)) return fail(400, 'Time cannot be in the future');
     if (seenAt < new Date(Date.now() - 24 * 3600e3)) return fail(400, 'Only post reductions seen in the last 24 hours');
+    let photo = null;
+    if (photosEnabled && req.file) {
+      try { photo = photos.prepare(req.file.buffer, config.limits.maxPhotoBytes); } catch (e) { return fail(e.status || 400, e.message); }
+    }
     if (await rateLimited(req.user.id, 'post', config.limits.postsPerHour)) return fail(429, 'Posting limit reached, try again later');
+    const photoKey = photo ? await photoStore.save(photo) : null;
     const store = await findOrCreateStore(b, req.user.id);
     const currency = config.countries[store.country]?.currency || 'GBP';
     const { id } = await db.run(`INSERT INTO posts (user_id,store_id,items,price_note,photo,seen_at,created_at,lat,lng,city,country,currency)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [req.user.id, store.id, items, clean(b.price_note, 200) || null, photoFile ? photoFile.filename : null,
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [req.user.id, store.id, items, clean(b.price_note, 200) || null, photoKey,
       seenAt.toISOString(), nowIso(), store.lat, store.lng, store.city, store.country, currency]);
     const post = await getPost(id, req);
     broadcast('post', { ...post, mine: false });
@@ -281,7 +290,7 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
     if (!p) return res.status(404).json({ error: 'not_found' });
     if (p.user_id !== req.user.id) return res.status(403).json({ error: 'You can only delete your own posts' });
     await db.run('DELETE FROM posts WHERE id = ?', [p.id]);
-    if (p.photo) fs.unlink(path.join(config.uploadsDir, p.photo), () => {});
+    if (p.photo) await photoStore.remove(p.photo);
     broadcast('delete', { id: p.id }); res.json({ ok: true });
   });
   app.post('/api/posts/:id/gone', requireUser, async (req, res) => {
@@ -332,11 +341,25 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
   });
 
   app.use((err, req, res, next) => {
-    if (err instanceof multer.MulterError) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Photo too large (max 5MB)' : err.message });
+    if (err instanceof multer.MulterError) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? `Photo too large (max ${Math.round(config.limits.maxPhotoBytes / 1024)}KB)` : err.message });
     console.error(err); res.status(500).json({ error: 'server_error' });
   });
   app.locals.db = db;
   app.locals.photosEnabled = photosEnabled;
+  app.locals.photoStore = photoStore;
+
+  // Photo retention: drop photos of posts older than PHOTO_RETENTION_DAYS (keeps free DB storage small; posts stay).
+  async function prunePhotos() {
+    const cutoff = new Date(Date.now() - config.photoRetentionDays * 864e5).toISOString();
+    const old = await db.all('SELECT id, photo FROM posts WHERE photo IS NOT NULL AND created_at < ?', [cutoff]);
+    for (const p of old) { await photoStore.remove(p.photo); await db.run('UPDATE posts SET photo = NULL WHERE id = ?', [p.id]); }
+    return old.length;
+  }
+  app.locals.prunePhotos = prunePhotos;
+  if (!opts.quiet) {
+    prunePhotos().catch(e => console.error('photo prune failed', e.message));
+    setInterval(() => prunePhotos().catch(() => {}), 12 * 3600e3).unref();
+  }
   return app;
 }
 module.exports = { createApp, kmBetween };

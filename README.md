@@ -8,7 +8,7 @@ Research behind it (data sources, chain reduction times, legal notes): [RESEARCH
 - **Browse without an account.** Anyone past the gate sees the map and the feed. The feed shows the newest posts first, with how long ago each was posted, the clock time, and the time the items were seen.
 - **Your location and what's nearby.** Use "📍 Near me" (browser geolocation) or search a postcode or place (Nominatim), then pick a radius of 1, 3, 10 or 25 km. Posts and stores are filtered by distance.
 - **Accounts protect against sabotage.** You must register to post, edit or delete your own posts, or mark a post "all gone". There are also hourly limits (10 posts, 30 all-gone marks), a honeypot field on the sign-up form, and checks that the time seen is within the last 24 hours and not in the future. Each post shows who posted it and who marked it all gone. An "all gone" mark can be undone by the poster or by whoever set it.
-- **Post form.** Supermarket (chain list or "Other"), branch name, address, items, prices/notes, time seen, location (your location or pick on the map), country and city, and an optional photo. Photos are **only offered when `PHOTOS_ENABLED=true`**, because they need persistent file storage. When photos are off, the photo controls are hidden and the server accepts posts without photos (any file sent is ignored). Before upload, the browser resizes the photo and re-encodes it, which removes EXIF data including GPS. The post's currency comes from the country.
+- **Post form.** Supermarket (chain list or "Other"), branch name, address, items, prices/notes, time seen, location (your location or pick on the map), country and city, and an optional photo. **Photos** are stored as BLOBs in the database (`photos` table) when running on Turso, so they work on free hosting with no disk. Locally they default to files in `uploads/`. Before upload, the browser resizes and re-encodes the photo (max 1280px, stepping JPEG quality down) until it fits the **300 KB cap**. The server then checks the real file type (JPEG, PNG or WebP only), **strips EXIF/GPS, XMP, comments and text metadata**, and enforces the cap again. Photos are served only through the gated route `/photos/:key` with `Cache-Control: private, max-age=31536000, immutable` and an ETag (304 on revalidation). Deleting a post deletes its photo, and photos older than `PHOTO_RETENTION_DAYS` (30) are deleted automatically while the post stays. When photos are off (`PHOTOS_ENABLED=false`), the photo controls are hidden and the server accepts posts without photos (any file sent is ignored). The post's currency comes from the country.
 - **Live updates.** New posts arrive over Server-Sent Events (`/api/stream`). If the stream drops, the page checks for new posts every 30 seconds instead. New posts play a ping (turn it on with "🔔 Sound on", because browsers block audio until you interact with the page) and get a red **NEW** sticker. Posts made since your last visit are also marked NEW.
 - **Predictions, always labelled PREDICTION.** These show as dashed purple pins with a "PREDICTION" tag in the popup, plus a week view.
   - *Chain typical:* reduction windows for 10 UK chains, seeded from `seeds/chain-predictions.json`. Each comes from a source cited in RESEARCH.md and carries a confidence level.
@@ -53,7 +53,10 @@ Environment settings (see `.env.example`):
 | `SITE_PASSWORD` | — | **Required.** Password for the access gate. |
 | `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | unset | When set, the app uses Turso. If a remote URL is set without a token, the server refuses to start. |
 | `SITE_SECRET` | generated | Signs the gate cookie. **Hosted mode** (remote Turso, or running on Render/Railway, or `HOSTED=true`): must be set in the environment. It is never written to disk, and the app refuses to start without it. Locally it is generated into `DATA_DIR/secret` if unset. |
-| `PHOTOS_ENABLED` | off | Set to `true` only if uploads go to persistent storage. |
+| `PHOTOS_ENABLED` | on with `db` storage, off with `disk` | `false` turns photos off. With disk storage, set `true` only if `UPLOADS_DIR` is persistent. |
+| `PHOTO_STORAGE` | `db` if Turso is set, else `disk` | `db` = BLOB table in the database; `disk` = files in `UPLOADS_DIR`. |
+| `MAX_PHOTO_KB` | 300 | Per-photo cap, measured after metadata is stripped. |
+| `PHOTO_RETENTION_DAYS` | 30 | Older photos are deleted (the post stays). |
 | `PORT` | 3000 | Set automatically by hosting platforms. |
 | `DATA_DIR`, `DB_FILE`, `UPLOADS_DIR` | `./data`, `DATA_DIR/rtc.sqlite`, `./uploads` | Local storage paths. |
 
@@ -77,14 +80,14 @@ There's no need to create tables. The app runs its migrations and seeds the stor
 **2. Deploy on Render** (free plan: https://render.com/docs/free):
 1. Go to **New → Blueprint**, connect GitHub, and pick `dedomenici/reduced-to-clear` on the `main` branch.
 2. Render reads `render.yaml` (free plan, Frankfurt region, no disk). It prompts for **SITE_PASSWORD**, **TURSO_DATABASE_URL** and **TURSO_AUTH_TOKEN**. `SITE_SECRET` is generated automatically.
-3. Click **Apply**. The build runs `npm ci --omit=dev`, the app starts with `npm start`, and `/healthz` is checked. The first boot logs `DB: libsql-remote (schema v2) · photos disabled · hosted mode` and `Seeded 1803 stores`.
+3. Click **Apply**. The build runs `npm ci --omit=dev`, the app starts with `npm start`, and `/healthz` is checked. The first boot logs `DB: libsql-remote (schema v3) · photos enabled (db) · hosted mode` and `Seeded 1803 stores`.
 4. Open the `https://<service>.onrender.com` URL and enter the password.
 5. Later pushes to `main` deploy automatically. Values marked `sync: false` are only asked for on first creation; change them later under **Environment**.
 
 **Free-tier trade-offs:**
 - **Cold starts:** Render's free service sleeps after 15 minutes without incoming requests. The next visit takes about a minute to wake it. There are 750 free instance hours per month per workspace, which is enough for one always-on service.
 - **No data loss:** all posts, accounts and predictions live in Turso, so restarts, redeploys and sleeping don't lose data. Live-update clients reconnect on their own.
-- **No photos:** the free plan has no persistent disk, so photos stay off. To add them later, set `PHOTOS_ENABLED=true` with persistent storage (a paid Render disk with `UPLOADS_DIR` on it), or add an object-storage backend such as R2 or S3. The upload code path is kept for this.
+- **Photos live in Turso:** the free plan has no persistent disk, so photos are stored in the database. At the full 300 KB cap, Turso's 5 GB free storage holds roughly 16,000 photos (most shrunk phone photos are smaller), and the 30-day retention keeps usage bounded. Photos are cached by browsers (`immutable`), so repeat views don't hit the database. To turn photos off, set `PHOTOS_ENABLED=false` in Render's Environment tab.
 - **Turso limits:** if a free-plan limit is exceeded, Turso blocks the database until the next month or until you upgrade. That's far beyond this app's expected use.
 
 ### Railway (alternative, has a free trial but not a permanent free tier)
@@ -92,10 +95,10 @@ Use the same steps with the same environment variables (`SITE_PASSWORD`, `SITE_S
 
 ## Test
 ```bash
-npm test                    # API tests on an in-memory local SQLite DB (gate, auth, posting+photo, photos-disabled mode, hosted-mode secret rules, SSE, permissions, validation, rate limits, migrations, seeding, predictions, DST)
+npm test                    # API tests on an in-memory local SQLite DB (gate, auth, posting, photos as DB BLOBs: EXIF/GPS + PNG text stripping, type sniffing, 300 KB cap, gated route + cache headers/304, delete + retention prune, photo defaults, photos-disabled mode, hosted-mode secret rules, SSE, permissions, validation, rate limits, migrations, seeding, predictions, DST)
 npm run test:libsql         # the same API tests through @libsql/client (the Turso driver) against a local file: URL
 npm run test:ui             # headless Chrome (desktop, photos disabled): gate → register → post (photo UI hidden) → second browser gets live NEW post → all gone
-npm run test:mobile         # 390x844 touch emulation (photos enabled): layout, touch targets, bottom sheet, full-screen form, camera input, PWA; writes test/screenshot-mobile*.png
+npm run test:mobile         # 390x844 touch emulation (photos stored in the DB, served via /photos/:key): layout, touch targets, bottom sheet, full-screen form, camera input, PWA; writes test/screenshot-mobile*.png
 ```
 The browser tests start their own server on a spare port using a **copy** of `data/rtc.sqlite`, so real data is never touched. Uploaded test photos are removed afterwards. They need Chrome (`CHROME_PATH`, default `/usr/bin/google-chrome`).
 
@@ -111,6 +114,7 @@ The browser tests start their own server on a spare port using a **copy** of `da
 | GET | /api/stores?lat&lng&radius_km&at | stores with today's prediction |
 | GET | /api/stores/:id/predictions | 7-day prediction view |
 | GET | /api/stream | SSE: `post`, `update`, `delete` |
+| GET | /photos/:key | post photo (gated; private immutable cache, ETag/304) |
 
 ## Before going public (not done in prototype)
 - Email verification and/or phone or OAuth sign-in; reporting and moderation; trust scores (for example, LiveCheaper-style multi-report verification).
