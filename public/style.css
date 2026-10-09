@@ -112,3 +112,8 @@ table.week td{border-top:1px solid #eee;padding:.3rem;vertical-align:top}
 
 .brand .sticker.logo{font-size:1.4rem}
 @media (max-width: 1360px) and (min-width: 801px){.brand .logo-text>span{display:block}.brand .sticker.logo .trolley{width:1.9em;height:1.65em}}
+
+/* "Go international" toggle: bottom-left of the map (above the bottom sheet's peek on phones) */
+.intl-toggle{position:absolute;z-index:550;left:10px;bottom:28px;min-height:var(--tap);padding:.4rem .8rem;border-radius:999px;border:2px solid var(--ink);background:#fff;color:var(--ink);font-weight:700;font-size:.9rem;box-shadow:0 2px 6px rgba(0,0,0,.25)}
+.intl-toggle.on{background:var(--yellow)}
+@media (max-width: 800px){.intl-toggle{bottom:calc(var(--peek) + 12px);font-size:.85rem}}

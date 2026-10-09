@@ -1,0 +1,24 @@
+# Keep the Render free instance warm (it sleeps after ~15 min without traffic) by pinging /healthz every 10 minutes.
+#
+# Budget (private repo, GitHub Free = 2000 Actions minutes/month): every job is billed rounded UP to a whole
+# minute, so a ~10 s ping still costs 1 minute. Round-the-clock '*/10 * * * *' = 144 runs/day ≈ 4,320–4,464
+# min/month, which is over the free allowance. So we ping every 10 minutes only during 12:00–21:59 UTC
+# (13:00–22:59 UK summer time, 12:00–21:59 in winter), covering the afternoon/evening reduction hours:
+# 60 runs/day ≈ 1,800–1,860 min/month. To go 24/7 change the cron to '*/10 * * * *' (fine if the repo is
+# public, where standard runners are free).
+#
+# Note: GitHub's scheduler is best-effort; scheduled runs are often delayed by several minutes (sometimes
+# more under load) and may be skipped, so the site can still occasionally cold-start.
+name: keep-awake
+on:
+  schedule:
+    - cron: '*/10 12-21 * * *'
+  workflow_dispatch:
+permissions: {}
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping /healthz
+        run: curl -fsS --max-time 60 --retry 2 --retry-delay 5 --retry-all-errors https://reduced-to-clear.onrender.com/healthz

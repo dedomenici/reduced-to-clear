@@ -1,4 +1,5 @@
 const express = require('express');
+const compression = require('compression');
 const cookieParser = require('cookie-parser');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
@@ -10,6 +11,7 @@ const { openDb } = require('./db');
 const predict = require('./predict');
 const photos = require('./photos');
 const geo = require('./geo');
+const { createAssets } = require('./assets');
 const { createOsm, chainFor, ATTRIBUTION, ATTRIBUTION_URL } = require('./osm');
 const withChainKey = s => ({ ...s, chainKey: chainFor({ brand: s.chain, name: s.name }) }); // e.g. 'Carrefour City' -> 'Carrefour', 'イオン' -> 'AEON'
 const seeds = require('../seeds/chain-predictions.json');
@@ -64,6 +66,17 @@ async function createApp(opts = {}) {
   app.set('trust proxy', 1); // behind Render/Railway's proxy: correct req.ip and req.secure
   app.get('/healthz', (req, res) => res.json({ ok: true }));
   app.use((req, res, next) => { res.set('X-Content-Type-Options', 'nosniff'); next(); });
+  // gzip/brotli for HTML, JS, CSS and JSON. Never the SSE stream (compression would buffer events). Brotli at a
+  // moderate level keeps CPU low on the free instance.
+  app.use(compression({ threshold: 1024, brotli: { params: { [require('zlib').constants.BROTLI_PARAM_QUALITY]: 5 } },
+    filter: (req, res) => req.path !== '/api/stream' && compression.filter(req, res) }));
+  const assets = createAssets(path.join(config.ROOT, 'public'));
+  const IMMUTABLE = 'public, max-age=31536000, immutable';
+  const sendAsset = (req, res, next) => { // /a/<hash>/<file>: content-hashed, cache forever
+    const f = assets.fileFor(req.params.hash, req.params.file);
+    if (!f) return res.redirect(302, assets.url(req.params.file)); // old hash after a deploy: send to the current one
+    res.set('Cache-Control', IMMUTABLE); res.sendFile(f, { cacheControl: false });
+  };
   app.use(cookieParser());
   app.use(express.json({ limit: '100kb' }));
   app.use(express.urlencoded({ extended: false }));
@@ -74,7 +87,7 @@ async function createApp(opts = {}) {
   const gatePage = (err) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#1d1d1b"><link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icons/favicon-32.png"><link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-<title>Reduced to Clear</title><link rel="stylesheet" href="/gate.css"></head><body class="gate">
+<title>Reduced to Clear</title><link rel="preload" href="${assets.font}" as="font" type="font/woff2" crossorigin><link rel="stylesheet" href="${assets.url('gate.css')}"></head><body class="gate">
 <form method="post" action="/gate" class="gate-card"><div class="sticker big logo" role="img" aria-label="Reduced to Clear"><svg class="trolley" viewBox="0 0 64 56" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h9l8 32h33" stroke-width="5"/><path d="M14 13h46l-7 19H18z" stroke-width="4" fill="#fff"/><path d="M29 13v19M44 13v19M16 22.5h41" stroke-width="2.5"/></g><circle cx="24" cy="48" r="5" fill="currentColor"/><circle cx="48" cy="48" r="5" fill="currentColor"/></svg><span class="logo-text" aria-hidden="true">REDUCED<br>TO CLEAR</span></div>
 <p>This site is private for now. Enter the access password.</p>
 ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
@@ -84,9 +97,12 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
   const pub = f => path.join(config.ROOT, 'public', f);
   app.get('/gate.css', (req, res) => res.sendFile(pub('gate.css')));
   app.get('/manifest.webmanifest', (req, res) => res.type('application/manifest+json').sendFile(pub('manifest.webmanifest')));
-  app.get('/sw.js', (req, res) => res.set('Cache-Control', 'no-cache').type('application/javascript').sendFile(pub('sw.js')));
+  // Service worker: app-shell list + version injected so a deploy refreshes the cache. Must not be cached itself.
+  const swSource = fs.readFileSync(pub('sw.js'), 'utf8').replace('__VERSION__', assets.version).replace('[/*__SHELL__*/]', JSON.stringify(assets.shell));
+  app.get('/sw.js', (req, res) => res.set('Cache-Control', 'no-cache').type('application/javascript').send(swSource));
   app.use('/icons', express.static(pub('icons'), { maxAge: '7d' }));
-  app.use('/fonts', express.static(pub('fonts'), { maxAge: '30d' })); // logo web font (OFL), used on the gate page too
+  app.use('/fonts', express.static(pub('fonts'), { maxAge: '365d', immutable: true })); // versioned file name; used on the gate page too
+  app.get('/a/:hash/gate.css', (req, res, next) => { req.params.file = 'gate.css'; sendAsset(req, res, next); }); // gate page styling (public)
   app.get('/gate', (req, res) => res.type('html').send(gatePage(false)));
   app.post('/gate', (req, res) => {
     const ip = req.ip; const f = gateFails.get(ip) || { n: 0, t: Date.now() };
@@ -109,7 +125,9 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
   });
 
   // ---------- Static (behind gate) ----------
-  app.use(express.static(path.join(config.ROOT, 'public')));
+  app.get('/a/:hash/:file', sendAsset);
+  app.use(assets.leaflet.dir, express.static(path.join(path.dirname(require.resolve('leaflet/package.json')), 'dist'), { maxAge: '365d', immutable: true }));
+  app.use(express.static(path.join(config.ROOT, 'public'), { index: false })); // unversioned fallbacks (revalidated via ETag)
 
   // Photos (behind the gate). Keys are random and content never changes, so cache hard in the browser only.
   app.get('/photos/:key', async (req, res) => {
@@ -169,10 +187,19 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
   });
   app.get('/api/me', (req, res) => res.json({ user: req.user }));
   const chainsFor = cc => config.chainsByCountry[cc] || [];
-  app.get('/api/config', (req, res) => res.json({ chainsByCountry: config.chainsByCountry, photosEnabled, maxPhotoBytes: config.limits.maxPhotoBytes,
+  const clientConfig = () => ({ chainsByCountry: config.chainsByCountry, photosEnabled, maxPhotoBytes: config.limits.maxPhotoBytes,
     attribution: { text: ATTRIBUTION, url: ATTRIBUTION_URL },
     // non-secret diagnostics (behind the gate): lets the owner confirm what the host's env actually turned on
-    server: { schema: db.schemaVersion, db: db.kind, photoStorage, photosEnabledFrom: opts.photosEnabled !== undefined ? 'option' : config.photosEnabledFrom, osmOnDemand: osm.options.enabled, osm: osm.stats } }));
+    server: { schema: db.schemaVersion, db: db.kind, photoStorage, photosEnabledFrom: opts.photosEnabled !== undefined ? 'option' : config.photosEnabledFrom, osmOnDemand: osm.options.enabled, osm: osm.stats, assets: assets.version } });
+  app.get('/api/config', (req, res) => res.json(clientConfig()));
+  // The app page: versioned asset URLs + the user and config inlined, so the first load makes no /api/me or /api/config call.
+  const indexTemplate = fs.readFileSync(path.join(config.ROOT, 'views', 'index.html'), 'utf8')
+    .replace(/\{\{asset:([\w.]+)\}\}/g, (m, f) => assets.url(f))
+    .replace(/\{\{leaflet:(css|js)\}\}/g, (m, k) => assets.leaflet[k]).replace(/\{\{font\}\}/g, assets.font);
+  app.get(['/', '/index.html'], (req, res) => {
+    const boot = JSON.stringify({ user: req.user, cfg: clientConfig() }).replace(/</g, '\\u003c');
+    res.set('Cache-Control', 'no-cache, private').type('html').send(indexTemplate.replace('{{BOOT}}', boot));
+  });
   // Offline lookup (no external calls): country, time zone and currency for a point, plus the chain list for that country.
   app.get('/api/geo', (req, res) => {
     const lat = Number(req.query.lat), lng = Number(req.query.lng);

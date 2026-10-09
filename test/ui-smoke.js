@@ -140,9 +140,18 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const apiCalls = () => nowhere.evaluate(() => performance.getEntriesByType('resource').map(e => e.name).filter(u => /\/api\/(posts|stores)\?/.test(u)).map(u => u.replace(location.origin, '')));
   world.firstLoadRequests = await apiCalls();
   world.firstLoadOnlyLondon = world.firstLoadRequests.length > 0 && world.firstLoadRequests.every(u => /lat=51\.50/.test(u));
+  // International is off by default: panning ~340 km to Paris does not fetch it, it shows a hint at the 'Go international' toggle
+  world.intlButton = await nowhere.$eval('#btn-intl', b => { const r = b.getBoundingClientRect(); return { text: b.textContent, pressed: b.getAttribute('aria-pressed'), visible: r.width > 0 && r.bottom <= innerHeight && r.top > innerHeight / 2 }; });
   await nowhere.evaluate(() => window.rtcMap.setView([48.8566, 2.3522], 14)); // user pans to Paris
+  await nowhere.waitForFunction(() => /outside your local area/.test(document.querySelector('#map-hint').textContent), { timeout: 10000 });
+  await sleep(1500);
+  world.intlOffBlocksParis = !(await nowhere.$eval('#feed', n => n.textContent.includes('Paris test'))) && (await apiCalls()).every(u => /lat=51\.50/.test(u));
+  await nowhere.click('#btn-intl');
   await nowhere.waitForFunction(() => document.querySelector('#feed').textContent.includes('Paris test'), { timeout: 10000 });
   world.panLoadsParis = true;
+  world.intlPersisted = await nowhere.evaluate(() => localStorage.getItem('rtc_intl') === '1' && document.querySelector('#btn-intl').getAttribute('aria-pressed') === 'true');
+  world.firstLoadNoMeConfig = await nowhere.evaluate(() => !performance.getEntriesByType('resource').some(e => /\/api\/(me|config)$/.test(e.name)));
+  world.splashGone = await nowhere.evaluate(() => !document.getElementById('splash') && Number(document.body.dataset.readyMs) > 0);
   world.kiokoLabel = await nowhere.waitForFunction(() => [...document.querySelectorAll('.leaflet-tooltip-pane, .leaflet-marker-icon')].length > 0, { timeout: 10000 })
     .then(() => nowhere.evaluate(async () => { const r = await fetch('/api/stores?lat=48.8566&lng=2.3522&radius_km=2').then(r => r.json());
       const k = r.stores.find(s => s.name === '京子食品'); return k && window.RTC_NAMES.storeLabel(k.name, k.chain, k.name_en); }));
@@ -151,7 +160,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const worldOk = world.mapCentredOnUser && world.genericPredictionPins > 0 && /^ReducedToClear\//.test(world.overpassUserAgent || '') && /OpenStreetMap/.test(world.attribution)
     && /Generic estimate/.test(world.popup) && /France · EUR · Europe\/Paris/.test(world.detected) && /€/.test(world.pricePlaceholder) && world.nearbyOsmStores >= 2
     && world.postShowsCurrency && /London/.test(world.noLocationHint) && /nearby/.test(world.firstLoadSummary) && !world.firstLoadShowsParis
-    && world.firstLoadOnlyLondon && world.panLoadsParis && world.kiokoLabel === '京子食品 (Kioko)';
+    && world.firstLoadOnlyLondon && world.panLoadsParis && world.intlButton.visible && world.intlButton.pressed === 'false' && /Go international/.test(world.intlButton.text)
+    && world.intlOffBlocksParis && world.intlPersisted && world.firstLoadNoMeConfig && world.splashGone && world.kiokoLabel === '京子食品 (Kioko)';
   console.log(JSON.stringify({ liveUpdateReceived: true, newBadgeShown: hasNew, photoUiHiddenWhenDisabled: photoUiHidden, predictionPins: predPins, world, alerts, pageErrors: errors }, null, 1));
   await browser.close(); if (srv) srv.stop(); mock.close();
   if (!hasNew || !photoUiHidden || !worldOk || !alertsOk || !soundPrefOk || errors.length) process.exit(1);

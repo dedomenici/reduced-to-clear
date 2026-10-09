@@ -8,6 +8,8 @@
       appName: 'Reduced to Clear',
       nearMe: 'Near me', useMyLocation: 'Use my location', searchPlaceholder: 'Postcode, town or place…', searchLabel: 'Search for a place', go: 'Go',
       radius: 'Radius', soundOn: 'Sound on', soundOff: 'Sound off', toggleSound: 'Toggle sound (checkout beep when reductions start nearby)', pingTitle: 'Beep when reductions start at stores on your map',
+      intlOff: '🌍 Go international', intlOn: '🌍 International: on', intlTitle: 'Load reductions anywhere in the world, not just within ~50 km of you',
+      intlHint: 'That\'s outside your local area (~50 km). Tap "🌍 Go international" to load it.',
       londonFallback: 'Showing London. Tap 📍 Near me (allow location) or search a place to see your area.',
       alertPost: 'Reductions just posted at {name}', alertPostMany: 'Reductions just posted at {n} stores on your map',
       alertPred: 'reductions usually start around now at {name}', alertPredMany: 'reductions usually start around now at {n} stores on your map',

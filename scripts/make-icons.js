@@ -4,7 +4,7 @@ const fs = require('fs'), path = require('path');
 const puppeteer = require('puppeteer-core');
 const pub = (...p) => path.join(__dirname, '..', 'public', ...p);
 const trolley = fs.readFileSync(pub('icons', 'trolley.svg'), 'utf8');
-const font = fs.readFileSync(pub('fonts', 'doto-900-latin.woff2')).toString('base64');
+const font = fs.readFileSync(pub('fonts', 'doto-v3-900-latin.woff2')).toString('base64');
 const page = ({ size, safe, text }) => `<!doctype html><style>
 @font-face{font-family:Doto;font-weight:900;src:url(data:font/woff2;base64,${font}) format('woff2')}
 html,body{margin:0;width:${size}px;height:${size}px;background:#1d1d1b;display:grid;place-items:center;overflow:hidden}

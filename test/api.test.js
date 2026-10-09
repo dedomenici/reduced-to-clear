@@ -467,3 +467,41 @@ test('international chain seeds: every row is sourced; local-script OSM brands m
   // Same chain name in another country does not borrow Taiwan's rows.
   assert.strictEqual(predict.predictStore({ chain: 'PX Mart', country: 'JP' }, 3, [], rows).chain.length, 0);
 });
+
+test('performance: compression, versioned immutable assets, boot data inlined, app-shell service worker, gate intact', async () => {
+  // gate still blocks the app page and the (versioned) app code; only gate styling, font, icons, manifest and sw are public
+  let r = await req('perf', 'GET', '/');
+  assert.strictEqual(r.status, 302); assert.match(r.headers.get('location'), /\/gate/);
+  const gateHtml = (await req('perf', 'GET', '/gate')).data;
+  const gateCss = gateHtml.match(/href="(\/a\/[0-9a-f]{10}\/gate\.css)"/)[1];
+  assert.match(gateHtml, /rel="preload" href="\/fonts\/doto-v3-900-latin\.woff2" as="font"/);
+  r = await req('perf', 'GET', gateCss); assert.strictEqual(r.status, 200); assert.match(r.headers.get('cache-control'), /immutable/);
+  await gate('perf');
+  r = await req('perf', 'GET', '/');
+  assert.strictEqual(r.status, 200); assert.match(r.headers.get('cache-control'), /no-cache/);
+  assert.match(r.headers.get('content-encoding') || '', /^(br|gzip)$/, 'HTML compressed');
+  const html = r.data;
+  const boot = JSON.parse(html.match(/<script id="boot" type="application\/json">(.*?)<\/script>/s)[1]);
+  assert.strictEqual(boot.user, null); assert.ok(boot.cfg.chainsByCountry.GB && 'photosEnabled' in boot.cfg, 'config inlined: no /api/config on first load');
+  assert.ok(!/<\/script><script/.test(JSON.stringify(boot)));
+  const appJs = html.match(/<script defer src="(\/a\/[0-9a-f]{10}\/app\.js)"><\/script>/)[1];
+  assert.match(html, /<script defer src="\/vendor\/leaflet-1\.9\.4\/leaflet\.js"><\/script>/); assert.match(html, /id="splash"/);
+  r = await req('perf', 'GET', appJs);
+  assert.strictEqual(r.status, 200); assert.strictEqual(r.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+  assert.match(r.headers.get('content-encoding') || '', /^(br|gzip)$/, 'JS compressed');
+  r = await req('perf', 'GET', '/a/0000000000/app.js'); assert.strictEqual(r.status, 302); assert.strictEqual(r.headers.get('location'), appJs, 'stale hash -> current');
+  r = await req('perf', 'GET', '/vendor/leaflet-1.9.4/leaflet.css'); assert.strictEqual(r.status, 200); assert.match(r.headers.get('cache-control'), /immutable/);
+  r = await req('perf', 'GET', '/vendor/leaflet-1.9.4/images/layers.png'); assert.strictEqual(r.status, 200);
+  r = await req('nobody', 'GET', appJs); assert.strictEqual(r.status, 302, 'app code stays behind the gate');
+  // service worker: versioned app shell only (no pages, no API)
+  const sw = (await req('nobody', 'GET', '/sw.js')).data;
+  assert.ok(!sw.includes('__VERSION__') && !sw.includes('__SHELL__'));
+  const shell = JSON.parse(sw.match(/const SHELL = (\[.*?\]);/)[1]);
+  assert.ok(shell.includes(appJs) && shell.every(u => /^\/(a|vendor|fonts)\//.test(u)), 'shell = versioned assets only');
+  assert.match(sw, /req\.mode === 'navigate'/);
+  // SSE is never compressed (would buffer events)
+  const ac = new AbortController();
+  const s = await fetch(base + '/api/stream', { headers: { Cookie: jar.perf, 'Accept-Encoding': 'gzip, br' }, signal: ac.signal });
+  assert.match(s.headers.get('content-type'), /^text\/event-stream/); assert.strictEqual(s.headers.get('content-encoding'), null);
+  ac.abort();
+});

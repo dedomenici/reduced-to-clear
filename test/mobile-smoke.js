@@ -33,8 +33,10 @@ const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000
     results.sheetCollapsed = await page.$eval('#sheet', s => !s.classList.contains('open') && s.getBoundingClientRect().top > window.innerHeight - 120);
     results.fabVisible = await page.$eval('#fab-post', b => { const r = b.getBoundingClientRect(); return r.width >= 44 && r.bottom <= window.innerHeight; });
     // touch targets: all visible buttons/selects/inputs in header + sheet handle + fab >= 44px tall
-    results.smallTouchTargets = await page.evaluate(() => [...document.querySelectorAll('header button, header select, header input, #sheet-handle, #fab-post, .leaflet-control-zoom a')]
+    results.smallTouchTargets = await page.evaluate(() => [...document.querySelectorAll('header button, header select, header input, #sheet-handle, #fab-post, #btn-intl, .leaflet-control-zoom a')]
       .filter(e => e.offsetParent !== null).filter(e => { const r = e.getBoundingClientRect(); return r.height < 40 || r.width < 40; }).map(e => e.id || e.textContent.trim().slice(0, 20)));
+    results.intlToggle = await page.evaluate(() => { const b = document.querySelector('#btn-intl').getBoundingClientRect(), f = document.querySelector('#fab-post').getBoundingClientRect(), s = document.querySelector('#sheet').getBoundingClientRect();
+      return { onScreen: b.bottom <= innerHeight && b.left >= 0, clearOfFab: b.right < f.left || b.bottom < f.top, aboveSheet: b.bottom <= s.top + 1 }; });
     await page.screenshot({ path: 'test/screenshot-mobile.png' });
 
     // Guest taps FAB -> login sheet; register
@@ -96,7 +98,7 @@ const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000
   results.pageErrors = errors;
   console.log(JSON.stringify(results, null, 1));
   const bad = !results.gateShown || !results.manifest.ok || !results.iconsOk || !results.noHorizontalScroll || !results.mapFullWidth || !results.sheetCollapsed
-    || !results.fabVisible || results.smallTouchTargets.length || !results.formFullScreen || results.cameraInput.capture !== 'environment'
+    || !results.fabVisible || !results.intlToggle.onScreen || !results.intlToggle.clearOfFab || !results.intlToggle.aboveSheet || results.smallTouchTargets.length || !results.formFullScreen || results.cameraInput.capture !== 'environment'
     || !results.formInputsNoZoom || !results.sheetOpensAfterPost || !results.sheetToggles || results.postHasPhoto !== true || errors.length
     || !results.soundDefaultOn || !results.offChoiceKept || !results.soundOn || results.alertPostStatus !== 201 && results.alertPostStatus !== 200 || !/Alert Test Express/.test(results.alert.toast) || !results.alert.toastOnScreen || !results.alert.reducedMotionNoPulse;
   if (bad) { console.error('MOBILE SMOKE FAILED'); process.exit(1); }

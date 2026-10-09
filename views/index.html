@@ -12,11 +12,31 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icons/favicon-32.png">
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
-<link rel="stylesheet" href="/gate.css">
-<link rel="stylesheet" href="/style.css">
+<link rel="preload" href="{{font}}" as="font" type="font/woff2" crossorigin>
+<link rel="preconnect" href="https://a.tile.openstreetmap.org" crossorigin>
+<style>/* branded loading screen: inline so it paints before anything else loads */
+#splash{position:fixed;inset:0;z-index:99999;background:#1d1d1b;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;color:#fff;font:600 15px system-ui,sans-serif;transition:opacity .25s}
+#splash.out{opacity:0;pointer-events:none}
+#splash .sp-sticker{background:#ffd400;color:#1d1d1b;border:3px solid #fff;outline:2px solid #1d1d1b;border-radius:10px;padding:14px 20px;transform:rotate(-4deg);display:flex;flex-direction:column;align-items:center;gap:8px;font:900 26px/1 'Doto',ui-monospace,monospace;letter-spacing:.04em;text-align:center}
+#splash svg{width:64px;height:56px}
+#splash .sp-dots::after{content:'';animation:spdots 1.2s steps(4) infinite}
+@keyframes spdots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
+@media (prefers-reduced-motion: reduce){#splash .sp-dots::after{animation:none;content:'…'}}
+</style>
+<link rel="stylesheet" href="{{leaflet:css}}">
+<link rel="stylesheet" href="{{asset:gate.css}}">
+<link rel="stylesheet" href="{{asset:style.css}}">
+<script id="boot" type="application/json">{{BOOT}}</script>
+<script defer src="{{leaflet:js}}"></script>
+<script defer src="{{asset:i18n.js}}"></script>
+<script defer src="{{asset:names.js}}"></script>
+<script defer src="{{asset:alerts.js}}"></script>
+<script defer src="{{asset:area.js}}"></script>
+<script defer src="{{asset:app.js}}"></script>
 </head>
 <body>
+<div id="splash" role="status" aria-label="Loading"><div class="sp-sticker"><svg viewBox="0 0 64 56" aria-hidden="true"><g fill="none" stroke="#1d1d1b" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h9l8 32h33" stroke-width="5"/><path d="M14 13h46l-7 19H18z" stroke-width="4" fill="#fff"/><path d="M29 13v19M44 13v19M16 22.5h41" stroke-width="2.5"/></g><circle cx="24" cy="48" r="5" fill="#1d1d1b"/><circle cx="48" cy="48" r="5" fill="#1d1d1b"/></svg><span>REDUCED<br>TO CLEAR</span></div><div class="sp-dots">Finding reductions near you</div></div>
+<script>setTimeout(function(){var s=document.getElementById('splash');if(s)s.className='out';},10000)</script>
 <header>
   <div class="brand"><span class="sticker logo" role="img" aria-label="Reduced to Clear"><svg class="trolley" viewBox="0 0 64 56" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h9l8 32h33" stroke-width="5"/><path d="M14 13h46l-7 19H18z" stroke-width="4" fill="#fff"/><path d="M29 13v19M44 13v19M16 22.5h41" stroke-width="2.5"/></g><circle cx="24" cy="48" r="5" fill="currentColor"/><circle cx="48" cy="48" r="5" fill="currentColor"/></svg><span class="logo-text" aria-hidden="true"><span>REDUCED</span> <span>TO CLEAR</span></span></span></div>
   <div class="loc">
@@ -35,6 +55,7 @@
   <div id="map" data-i18n-aria-label="mapLabel" aria-label="Map"></div>
   <div id="map-hint" class="map-hint" hidden></div>
   <div id="alert-toast" class="alert-toast" role="status" aria-live="polite" hidden></div>
+  <button id="btn-intl" class="intl-toggle" type="button" aria-pressed="false"></button>
   <button id="fab-post" class="fab" data-i18n-aria-label="postFab" aria-label="Post reductions">＋</button>
   <aside id="sheet" class="sheet" data-i18n-aria-label="feedLabel" aria-label="Reductions feed">
     <button id="sheet-handle" class="sheet-handle" aria-expanded="false" aria-controls="sheet-body">
@@ -105,10 +126,5 @@
 <dialog id="dlg-pred"><div id="pred-body"></div><button id="pred-close" data-i18n="close">Close</button></dialog>
 <div id="pick-banner" class="pick-banner" hidden><span data-i18n="pickBanner">Tap the map to set the store location</span> <button id="pick-cancel" data-i18n="cancel">Cancel</button></div>
 
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-<script src="/i18n.js"></script>
-<script src="/names.js"></script>
-<script src="/alerts.js"></script>
-<script src="/app.js"></script>
 </body>
 </html>

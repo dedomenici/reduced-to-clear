@@ -8,6 +8,8 @@
   const postName = p => storeLabel(p.store_name, p.chain, p.store_name_en);
   const storeName = s => storeLabel(s.name, s.chain, s.name_en);
   const LONDON = { lat: 51.5074, lng: -0.1278 };
+  const AREA = window.RTC_AREA;
+  const bootData = (() => { try { return JSON.parse(document.getElementById('boot').textContent); } catch { return null; } })(); // inlined by the server
   I18N.apply();
   // No default city: start at the user's saved/current location; otherwise show the world and the latest posts everywhere.
   const st = {
@@ -20,7 +22,11 @@
     // The area whose posts/stores are loaded. First load: the user's own area only (saved/current location, else
     // London). It only changes when the user pans/zooms the map, searches a place or uses "Near me".
     area: null,
+    // International is off by default: nothing beyond ~50 km of home (the user's location, or London) is fetched
+    // until the user taps "Go international" (remembered).
+    intl: localStorage.getItem('rtc_intl') === '1',
   };
+  const home = () => st.center || (st.area && !st.area.world ? LONDON : null);
   localStorage.setItem('rtc_last_visit', new Date().toISOString());
 
   async function api(url, opts = {}) {
@@ -56,7 +62,15 @@
   function progView(lat, lng, zoom) { programmaticUntil = Date.now() + 1500; map.setView([lat, lng], zoom); }
   if (st.center) { st.area = { lat: st.center.lat, lng: st.center.lng, radius: st.radius }; progView(st.center.lat, st.center.lng, 14); }
   else progView(25, 10, 2);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }).addTo(map);
+  // Map tiles are added only once we know which area to show, so a first visit doesn't download world-view tiles
+  // it is about to throw away. updateWhenIdle/keepBuffer keep tile requests down while panning.
+  let tiles = null;
+  function ensureTiles() {
+    if (tiles) return;
+    tiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, updateWhenIdle: true, keepBuffer: 1,
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }).addTo(map);
+  }
+  if (st.area) ensureTiles();
   const postLayer = L.layerGroup().addTo(map);
   const predLayer = L.layerGroup().addTo(map);
   let youMarker = null, radiusCircle = null;
@@ -68,27 +82,42 @@
   }
   function setCenter(lat, lng, zoom) {
     st.center = { lat, lng }; localStorage.setItem('rtc_center', JSON.stringify(st.center));
-    st.area = { lat, lng, radius: st.radius };
+    st.area = { lat, lng, radius: st.radius }; ensureTiles();
     progView(lat, lng, zoom || Math.max(map.getZoom(), 14)); drawCenter(); showHint(null); load();
   }
   function londonFallback() { // no location available: show London only (never the worldwide feed on first load)
     if (st.area) return;
-    st.area = { ...LONDON, radius: st.radius }; progView(LONDON.lat, LONDON.lng, 13); showHint(t('londonFallback')); load();
+    st.area = { ...LONDON, radius: st.radius }; ensureTiles(); progView(LONDON.lat, LONDON.lng, 13); showHint(t('londonFallback')); load();
   }
-  // User pans/zooms: load the area in view (debounced). Zoomed out past ~50 km: latest posts everywhere, no store pins.
+  // User pans/zooms: load the area in view (debounced) if it is local (<= ~50 km from home) or international is on.
+  // Zoomed out past ~50 km with international on: latest posts everywhere, no store pins.
+  function viewArea() {
+    const c = map.getCenter(), halfDiag = map.distance(c, map.getBounds().getNorthEast()) / 1000;
+    return AREA.areaForView({ lat: c.lat, lng: L.Util.wrapNum(c.lng, [-180, 180], true) }, halfDiag, st.radius);
+  }
+  function considerView() {
+    if (!st.area) return;
+    const next = viewArea(), d = AREA.decide({ home: home(), cur: st.area, next, intl: st.intl });
+    if (d === 'blocked') { showHint(t('intlHint')); return; }
+    showHint(null);
+    if (d === 'load') { st.area = next; load(); }
+  }
   let moveTimer = null;
   map.on('moveend', () => {
     if (Date.now() < programmaticUntil || !st.area) return;
-    clearTimeout(moveTimer); moveTimer = setTimeout(() => {
-      const c = map.getCenter(), halfDiag = map.distance(c, map.getBounds().getNorthEast()) / 1000;
-      const radius = Math.max(st.radius, Math.ceil(halfDiag * 10) / 10);
-      const next = radius > 50 ? { world: true } : { lat: c.lat, lng: L.Util.wrapNum(c.lng, [-180, 180], true), radius };
-      const cur = st.area;
-      if (cur.world && next.world) return;
-      if (!cur.world && !next.world && next.radius <= cur.radius && map.distance([cur.lat, cur.lng], c) / 1000 + next.radius <= cur.radius) return; // already loaded
-      st.area = next; showHint(null); load();
-    }, 600);
+    clearTimeout(moveTimer); moveTimer = setTimeout(considerView, 600);
   });
+  function intlBtn() {
+    const b = $('#btn-intl'); b.textContent = t(st.intl ? 'intlOn' : 'intlOff'); b.setAttribute('aria-pressed', String(st.intl));
+    b.title = t('intlTitle'); b.classList.toggle('on', st.intl);
+  }
+  $('#btn-intl').onclick = () => {
+    st.intl = !st.intl; localStorage.setItem('rtc_intl', st.intl ? '1' : '0'); intlBtn();
+    if (st.intl) considerView(); // load what's in view now
+    else if (st.area && (st.area.world || !AREA.isLocal(home(), st.area))) { // back to the local area
+      const h = home(); st.area = { lat: h.lat, lng: h.lng, radius: st.radius }; progView(h.lat, h.lng, 14); showHint(null); load();
+    }
+  };
   function showHint(text) { const h = $('#map-hint'); h.hidden = !text; h.textContent = text || ''; }
   map.on('click', e => {
     if (st.picking) { setPostLocation(e.latlng.lat, e.latlng.lng); endPicking(); $('#dlg-post').showModal(); }
@@ -206,13 +235,19 @@
   async function load() {
     if (!st.area) return; // still waiting for the user's location (or the London fallback)
     const seq = ++loadSeq; clearTimeout(storeRetry);
+    // posts and stores in parallel
+    if (!st.area.world) loadStores(seq, 0); else { st.stores = []; renderStores([]); areaStatus(null); }
     const { posts } = await api('/api/posts?' + postsQuery());
     if (seq !== loadSeq) return;
     st.posts = new Map(posts.map(p => [p.id, p]));
     for (const p of posts) if (p.created_at > st.lastVisit && !p.mine) st.newIds.add(p.id);
     renderAll();
-    if (!st.area.world) loadStores(seq, 0); else { st.stores = []; renderStores([]); areaStatus(null); }
-    if (!firstLoadDone) { firstLoadDone = true; loadBeep(); }
+    if (!firstLoadDone) { firstLoadDone = true; hideSplash(); loadBeep(); }
+  }
+  function hideSplash() {
+    const sp = document.getElementById('splash'); if (!sp) return;
+    document.body.dataset.readyMs = String(Math.round(performance.now())); // first data on screen (for load-time checks)
+    sp.className = 'out'; setTimeout(() => sp.remove(), 300); map.invalidateSize();
   }
   function areaStatus(text) { const a = $('#area-status'); a.hidden = !text; a.textContent = text || ''; }
   async function loadStores(seq, attempt) {
@@ -355,7 +390,10 @@
     e.preventDefault(); const q = $('#place').value.trim(); if (!q) return;
     try {
       const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q)).then(r => r.json());
-      if (!r.length) return alert(t('placeNotFound')); setCenter(Number(r[0].lat), Number(r[0].lon), 15);
+      if (!r.length) return alert(t('placeNotFound'));
+      const lat = Number(r[0].lat), lng = Number(r[0].lon);
+      if (!st.intl && home() && !AREA.isLocal(home(), { lat, lng })) { progView(lat, lng, 14); showHint(t('intlHint')); return; } // show it, don't fetch
+      setCenter(lat, lng, 15);
     } catch { alert(t('searchFailed')); }
   };
   $('#radius').value = String(st.radius);
@@ -493,7 +531,8 @@
   // ---------- Boot ----------
   (async () => {
     soundBtn(); drawCenter();
-    const [{ user }, cfg] = await Promise.all([api('/api/me'), api('/api/config')]);
+    intlBtn();
+    const { user, cfg } = bootData || { ...(await api('/api/me')), cfg: await api('/api/config') }; // normally inlined: no API round trips
     st.cfg = cfg; setUser(user);
     $('#photo-fieldset').hidden = !cfg.photosEnabled;
     const predLabel = el('span', { class: 'pred-label' }, t('prediction'));
