@@ -32,6 +32,7 @@
 <script defer src="{{asset:names.js}}"></script>
 <script defer src="{{asset:alerts.js}}"></script>
 <script defer src="{{asset:area.js}}"></script>
+<script defer src="{{asset:cities.js}}"></script>
 <script defer src="{{asset:app.js}}"></script>
 </head>
 <body>
@@ -45,7 +46,7 @@
     <select id="radius" data-i18n-aria-label="radius" aria-label="Radius"><option value="1">1 km</option><option value="3" selected>3 km</option><option value="10">10 km</option><option value="25">25 km</option></select>
   </div>
   <div class="acct">
-    <button id="btn-sound" data-i18n-title="pingTitle" data-i18n-aria-label="toggleSound" title="Ping on new posts" aria-label="Toggle ping sound">🔇<span class="lbl"> Sound off</span></button>
+    <button id="btn-sound" type="button" data-i18n-title="beepTitle" data-i18n-aria-label="beepTitle" title="Play the checkout beep" aria-label="Play the checkout beep">🔔<span class="lbl"> <span data-i18n="beepBtn">Beep</span></span></button>
     <span id="who"></span>
     <button id="btn-login"><span data-i18n="login">Log in</span><span class="lbl" data-i18n="loginOrRegister"> / Register</span></button>
     <button id="btn-logout" data-i18n="logout" hidden>Log out</button>
@@ -56,6 +57,12 @@
   <div id="map-hint" class="map-hint" hidden></div>
   <div id="alert-toast" class="alert-toast" role="status" aria-live="polite" hidden></div>
   <button id="btn-intl" class="intl-toggle" type="button" aria-pressed="false"></button>
+  <div id="locate-card" class="locate-card" role="dialog" aria-labelledby="locate-card-title" hidden>
+    <b id="locate-card-title" data-i18n="locateCardTitle">📍 Find reductions near you</b>
+    <p data-i18n="locateCardText">Your browser will ask to share your location. It's only used to centre the map on shops near you.</p>
+    <button id="locate-skip" type="button" data-i18n="locateSkip">Not now (show London)</button>
+  </div>
+  <div id="branch-banner" class="branch-banner" role="status" aria-live="polite" hidden><span id="branch-text"></span> <button id="branch-close" type="button" data-i18n="close">Close</button></div>
   <button id="fab-post" class="fab" data-i18n-aria-label="postFab" aria-label="Post reductions">＋</button>
   <aside id="sheet" class="sheet" data-i18n-aria-label="feedLabel" aria-label="Reductions feed">
     <button id="sheet-handle" class="sheet-handle" aria-expanded="false" aria-controls="sheet-body">

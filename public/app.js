@@ -16,7 +16,6 @@
     user: null, cfg: null, posts: new Map(), newIds: new Set(),
     center: JSON.parse(localStorage.getItem('rtc_center') || 'null'),
     radius: Number(localStorage.getItem('rtc_radius') || 3),
-    sound: localStorage.getItem('rtc_sound') !== '0', // on by default; an explicit 'off' ("0") is kept
     lastVisit: localStorage.getItem('rtc_last_visit') || new Date(0).toISOString(),
     picking: false,
     // The area whose posts/stores are loaded. First load: the user's own area only (saved/current location, else
@@ -26,8 +25,11 @@
     // until the user taps "Go international" (remembered).
     intl: localStorage.getItem('rtc_intl') === '1',
   };
-  const home = () => st.center || (st.area && !st.area.world ? LONDON : null);
+  const home = () => st.center || st.homeFallback || null; // the user's location, else London once we've fallen back to it
   localStorage.setItem('rtc_last_visit', new Date().toISOString());
+  localStorage.removeItem('rtc_sound'); // the app no longer beeps on its own; the old setting is obsolete
+  const CITIES = window.RTC_CITIES;
+  const reduceMotion = () => !!(window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches);
 
   async function api(url, opts = {}) {
     const r = await fetch(url, { credentials: 'same-origin', ...opts });
@@ -60,6 +62,15 @@
   window.rtcMap = map; // handle for smoke tests / debugging
   let programmaticUntil = 0; // moves we make ourselves don't count as "the user panned"
   function progView(lat, lng, zoom) { programmaticUntil = Date.now() + 1500; map.setView([lat, lng], zoom); }
+  // Smooth camera moves we make ourselves (fly), or an instant jump with prefers-reduced-motion. Never count as a user pan.
+  function moveMap(lat, lng, zoom, duration = 1.2) {
+    const d = reduceMotion() ? 0 : duration; programmaticUntil = Date.now() + d * 1000 + 1500;
+    if (d) map.flyTo([lat, lng], zoom, { duration: d }); else map.setView([lat, lng], zoom, { animate: false });
+  }
+  function fitMap(bounds, { duration = 1.2, maxZoom = 16, padding = [30, 30] } = {}) {
+    const d = reduceMotion() ? 0 : duration; programmaticUntil = Date.now() + d * 1000 + 1500;
+    if (d) map.flyToBounds(bounds, { duration: d, maxZoom, padding }); else map.fitBounds(bounds, { animate: false, maxZoom, padding });
+  }
   if (st.center) { st.area = { lat: st.center.lat, lng: st.center.lng, radius: st.radius }; progView(st.center.lat, st.center.lng, 14); }
   else progView(25, 10, 2);
   // Map tiles are added only once we know which area to show, so a first visit doesn't download world-view tiles
@@ -87,7 +98,7 @@
   }
   function londonFallback() { // no location available: show London only (never the worldwide feed on first load)
     if (st.area) return;
-    st.area = { ...LONDON, radius: st.radius }; ensureTiles(); progView(LONDON.lat, LONDON.lng, 13); showHint(t('londonFallback')); load();
+    st.homeFallback = LONDON; st.area = { ...LONDON, radius: st.radius }; ensureTiles(); progView(LONDON.lat, LONDON.lng, 13); showHint(t('londonFallback')); load();
   }
   // User pans/zooms: load the area in view (debounced) if it is local (<= ~50 km from home) or international is on.
   // Zoomed out past ~50 km with international on: latest posts everywhere, no store pins.
@@ -103,20 +114,39 @@
     if (d === 'load') { st.area = next; load(); }
   }
   let moveTimer = null;
+  const userActed = () => nudger.userActed();
+  ['pointerdown', 'wheel', 'touchstart', 'keydown'].forEach(e => map.getContainer().addEventListener(e, userActed, { passive: true }));
   map.on('moveend', () => {
     if (Date.now() < programmaticUntil || !st.area) return;
+    userActed();
     clearTimeout(moveTimer); moveTimer = setTimeout(considerView, 600);
   });
   function intlBtn() {
     const b = $('#btn-intl'); b.textContent = t(st.intl ? 'intlOn' : 'intlOff'); b.setAttribute('aria-pressed', String(st.intl));
     b.title = t('intlTitle'); b.classList.toggle('on', st.intl);
   }
+  // International mode: world view with megacity shortcuts; clicking one flies there and loads its supermarkets.
+  const cityLayer = L.layerGroup();
+  for (const c of CITIES.CITIES) {
+    L.marker([c.lat, c.lng], { title: t('flyTo', { city: c.name }), alt: c.name, riseOnHover: true,
+      icon: L.divIcon({ className: 'city-label', html: c.name.replace(/[<&]/g, ''), iconSize: null }) })
+      .on('click', () => flyToCity(c)).addTo(cityLayer);
+  }
+  function showCities() { const on = st.intl && map.getZoom() <= 6; if (on && !map.hasLayer(cityLayer)) cityLayer.addTo(map); else if (!on && map.hasLayer(cityLayer)) cityLayer.remove(); }
+  map.on('zoomend', showCities);
+  function flyToCity(c) {
+    ensureTiles(); showHint(null); clearBranches();
+    st.area = { lat: c.lat, lng: c.lng, radius: st.radius }; moveMap(c.lat, c.lng, CITIES.CITY_ZOOM, 2); load();
+    document.body.dataset.city = c.name;
+  }
   $('#btn-intl').onclick = () => {
     st.intl = !st.intl; localStorage.setItem('rtc_intl', st.intl ? '1' : '0'); intlBtn();
-    if (st.intl) considerView(); // load what's in view now
-    else if (st.area && (st.area.world || !AREA.isLocal(home(), st.area))) { // back to the local area
-      const h = home(); st.area = { lat: h.lat, lng: h.lng, radius: st.radius }; progView(h.lat, h.lng, 14); showHint(null); load();
+    if (st.intl) { // zoom out to the world: latest posts everywhere + city shortcuts
+      ensureTiles(); showHint(null); st.area = { world: true }; moveMap(CITIES.WORLD.lat, CITIES.WORLD.lng, CITIES.WORLD.zoom, 1.5); load();
+    } else if (st.area && (st.area.world || !AREA.isLocal(home(), st.area))) { // back to the local area
+      const h = home() || LONDON; st.area = { lat: h.lat, lng: h.lng, radius: st.radius }; moveMap(h.lat, h.lng, 14, 1.5); showHint(null); load();
     }
+    showCities();
   };
   function showHint(text) { const h = $('#map-hint'); h.hidden = !text; h.textContent = text || ''; }
   map.on('click', e => {
@@ -211,11 +241,35 @@
         for (const x of predText(pr)) div.append(el('div', { class: 'small' }, '• ' + x));
         for (const src of sourcesOf(pr)) div.append(el('div', { class: 'small' }, t('source'), el('a', { href: src.url, target: '_blank', rel: 'noopener' }, src.title)));
         div.append(el('button', { onclick: () => showWeek(s.id) }, t('weekView')));
+        if (s.chain && s.chain !== 'Other') div.append(' ', el('button', { class: 'see-branches', onclick: () => seeBranches(s.chain) }, t('seeBranches')));
         return div;
       });
       m.addTo(predLayer);
     }
   }
+  // 'See all branches': every store of this chain we know about (only areas opened so far), clustered, map fitted to them.
+  let clusterReady = null, branchLayer = null;
+  function loadCluster() { // Leaflet.markercluster is self-hosted and only downloaded the first time it's needed
+    if (L.markerClusterGroup) return Promise.resolve();
+    return clusterReady || (clusterReady = new Promise((ok, fail) => {
+      const c = st.cfg.cluster; for (const href of [c.css, c.css2]) document.head.append(el('link', { rel: 'stylesheet', href }));
+      const sc = el('script', { src: c.js }); sc.onload = ok; sc.onerror = () => { clusterReady = null; fail(new Error('markercluster')); }; document.head.append(sc);
+    }));
+  }
+  function clearBranches() { if (branchLayer) { branchLayer.remove(); branchLayer = null; } $('#branch-banner').hidden = true; }
+  async function seeBranches(chain) {
+    map.closePopup();
+    let r; try { [r] = await Promise.all([api('/api/chains/' + encodeURIComponent(chain) + '/stores'), loadCluster()]); } catch (e) { return alert(e.message); }
+    clearBranches();
+    branchLayer = L.markerClusterGroup({ showCoverageOnHover: false, maxClusterRadius: 45, chunkedLoading: true });
+    for (const b of r.stores) branchLayer.addLayer(L.marker([b.lat, b.lng], { title: storeName(b), icon: L.divIcon({ className: '', html: '<div class="branch-pin"></div>', iconSize: [18, 18] }) }).bindTooltip(storeName(b)));
+    branchLayer.addTo(map);
+    const n = r.stores.length;
+    $('#branch-text').textContent = n ? [t(n === 1 ? 'branchesShown1' : 'branchesShown', { n, chain }), t('branchesNote'), r.capped ? t('branchesCapped', { cap: r.cap }) : ''].join(' ').trim() : t('branchesNone', { chain });
+    $('#branch-banner').hidden = false; document.body.dataset.branches = String(n);
+    if (n) fitMap(L.latLngBounds(r.stores.map(b => [b.lat, b.lng])), { maxZoom: 15, duration: 1.5 });
+  }
+  $('#branch-close').onclick = clearBranches;
   async function showWeek(id) {
     const { store, week } = await api(`/api/stores/${id}/predictions`);
     const body = $('#pred-body'); body.replaceChildren(el('span', { class: 'pred-label' }, t('prediction')), el('h2', {}, storeName(store)),
@@ -242,7 +296,8 @@
     st.posts = new Map(posts.map(p => [p.id, p]));
     for (const p of posts) if (p.created_at > st.lastVisit && !p.mine) st.newIds.add(p.id);
     renderAll();
-    if (!firstLoadDone) { firstLoadDone = true; hideSplash(); loadBeep(); }
+    if (!firstLoadDone) { firstLoadDone = true; hideSplash(); }
+    if (st.highlightAfterLoad) highlightReduced();
   }
   function hideSplash() {
     const sp = document.getElementById('splash'); if (!sp) return;
@@ -258,6 +313,7 @@
     clearTimeout(slow);
     if (seq !== loadSeq) return;
     st.stores = r.stores; renderStores(r.stores); checkPredictions();
+    if (st.highlightAfterLoad) { highlightReduced(); st.highlightAfterLoad = false; }
     if (r.pending && attempt < 6) { areaStatus(t('storesLoading')); storeRetry = setTimeout(() => loadStores(seq, attempt + 1), 4000); }
     else if (r.osmUnavailable) { areaStatus(t('storesUnavailable')); if (attempt < 8) storeRetry = setTimeout(() => loadStores(seq, attempt + 1), 75000); }
     else areaStatus(r.limited ? t('storesLimited') : null);
@@ -271,38 +327,13 @@
   };
 
   // ---------- Live: SSE with polling fallback ----------
-  function ping() {
-    if (!st.sound) return;
-    try {
-      const ctx = ping.ctx || (ping.ctx = new (window.AudioContext || window.webkitAudioContext)());
-      [880, 1320].forEach((f, i) => {
-        const o = ctx.createOscillator(), g = ctx.createGain(); o.frequency.value = f; o.type = 'sine';
-        const t = ctx.currentTime + i * 0.15; g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.3, t + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.25);
-        o.connect(g).connect(ctx.destination); o.start(t); o.stop(t + 0.3);
-      });
-    } catch { /* audio unavailable */ }
-  }
-  // Checkout-style beep, synthesised (no sample): one short ~1.35 kHz square blip with a soft envelope.
-  // One beep when the app has loaded (sound on only). Browsers block audio until a user gesture: play right away if the
-  // audio context is allowed to run (e.g. Chrome counts the gate form submit), otherwise on the first tap/key press.
-  function loadBeep() {
-    const d = document.body.dataset;
-    if (!st.sound) { d.loadBeep = 'off'; return; }
-    let ctx; try { ctx = ping.ctx || (ping.ctx = new (window.AudioContext || window.webkitAudioContext)()); } catch { d.loadBeep = 'unavailable'; return; }
-    const playNow = () => { d.loadBeep = 'played'; beeper.trigger(); };
-    if (ctx.state === 'running') return playNow();
-    d.loadBeep = 'waiting';
-    ctx.resume().then(() => { if (ctx.state === 'running' && d.loadBeep === 'waiting') { off(); playNow(); } }).catch(() => {});
-    const onGesture = () => { off(); if (d.loadBeep !== 'waiting') return; if (!st.sound) { d.loadBeep = 'off'; return; } ctx.resume().catch(() => {}); playNow(); };
-    const evs = ['pointerdown', 'keydown', 'touchend'];
-    const off = () => evs.forEach(e => window.removeEventListener(e, onGesture, true));
-    evs.forEach(e => window.addEventListener(e, onGesture, true));
-  }
+  // Checkout-style beep, synthesised (no sample): one short ~1.35 kHz square blip. Only ever played when the user
+  // presses the 🔔 button – the app makes no sound on its own.
+  let audioCtx = null;
   function beep() {
     document.body.dataset.beeps = String(Number(document.body.dataset.beeps || 0) + 1); // observable by smoke tests
-    if (!st.sound) return;
     try {
-      const ctx = ping.ctx || (ping.ctx = new (window.AudioContext || window.webkitAudioContext)());
+      const ctx = audioCtx || (audioCtx = new (window.AudioContext || window.webkitAudioContext)());
       if (ctx.state === 'suspended') ctx.resume().catch(() => {});
       const o = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter();
       o.type = 'square'; o.frequency.value = 1350; f.type = 'lowpass'; f.frequency.value = 4000;
@@ -311,7 +342,23 @@
       o.connect(f).connect(g).connect(ctx.destination); o.start(t0); o.stop(t0 + 0.15);
     } catch { /* audio unavailable */ }
   }
-  const beeper = A.createBeeper({ play: beep });
+  // New local reductions: instead of a sound, gently nudge the map towards the store(s) (batched; never while the user
+  // is moving the map or within 10 s of them doing so) and pulse the pins.
+  function nudgeTo(points) {
+    if (!points.length || !st.area || st.area.world) return;
+    const v = mapView(); if (!A.isLocalView(v.zoom, v.widthKm)) return;
+    const size = map.getSize(), pad = 50;
+    const fits = (c, z) => {
+      const p = map.project(L.latLng(c.lat, c.lng), z), half = size.divideBy(2).subtract([pad, pad]);
+      const b = L.latLngBounds(map.unproject(p.subtract(half), z), map.unproject(p.add(half), z));
+      return points.every(q => b.contains([q.lat, q.lng]));
+    };
+    const tgt = A.nudgeTarget({ center: map.getCenter(), zoom: map.getZoom(), points, fits });
+    if (!tgt) return;
+    document.body.dataset.nudges = String(Number(document.body.dataset.nudges || 0) + 1); // observable by smoke tests
+    moveMap(tgt.lat, tgt.lng, tgt.zoom, 1.6);
+  }
+  const nudger = A.createNudger({ run: nudgeTo });
   const alerter = A.createAlerter();
   function alertAttrs(storeId) {
     const a = storeId == null ? null : alerter.state(storeId); if (!a) return '"';
@@ -339,7 +386,7 @@
     if (!st.area || st.area.world || !st.stores || !st.stores.length || !$('#show-pred').checked) return;
     const view = mapView(), fired = [];
     for (const s of st.stores) { const a = alerter.prediction({ ...s, name: storeName(s) }, view); if (a) fired.push(a); }
-    if (fired.length) { beeper.trigger(); toast(fired); }
+    if (fired.length) { for (const a of fired) { const s = st.stores.find(x => x.id === a.storeId); if (s) nudger.trigger({ lat: s.lat, lng: s.lng }); } toast(fired); }
     if (fired.length || st.stores.some(s => alerter.state(s.id))) renderStores(st.stores);
     // Predictions are for the store's current day: refetch after midnight.
     const s0 = st.stores[0];
@@ -347,7 +394,7 @@
   }
   setInterval(checkPredictions, 30000);
   map.on('moveend', checkPredictions);
-  // (a) a new community post: beep + flash if the store is in view at city zoom or closer; otherwise the old two-note ping.
+  // (a) a new community post: nudge + pulse if the store is in view at city zoom or closer.
   function onNewPost(p) {
     if (st.posts.has(p.id) || !inRadius(p)) return;
     let alert = null;
@@ -355,7 +402,7 @@
     else {
       st.newIds.add(p.id); document.title = t('newTitle');
       alert = alerter.post({ ...p, store_name: postName(p) }, mapView());
-      if (alert) { beeper.trigger(); toast([alert]); } else ping();
+      if (alert) { nudger.trigger({ lat: p.lat, lng: p.lng }); toast([alert]); }
     }
     st.posts.set(p.id, p); renderAll();
     if (alert) renderStores(st.stores || []);
@@ -379,12 +426,20 @@
   setInterval(renderAll, 60000); // refresh "x min ago"
 
   // ---------- Location controls ----------
+  // On every load we ask for the location straight away, with a short explainer card next to the browser's prompt.
+  // Declined/unavailable: keep the saved location if there is one, else London.
+  const locCard = $('#locate-card');
   function locate(quiet) {
     if (!navigator.geolocation) { if (quiet) londonFallback(); else alert(t('noGeo')); return; }
-    if (quiet) showHint(t('locating'));
-    navigator.geolocation.getCurrentPosition(pos => setCenter(pos.coords.latitude, pos.coords.longitude, 15),
-      err => { if (quiet) londonFallback(); else alert(t('locationFailed', { msg: err.message })); }, { enableHighAccuracy: true, timeout: 10000 });
+    if (quiet) locCard.hidden = false;
+    const done = () => { locCard.hidden = true; };
+    navigator.geolocation.getCurrentPosition(pos => {
+      done(); const { latitude: lat, longitude: lng } = pos.coords;
+      if (quiet && st.center && AREA.kmBetween(st.center, { lat, lng }) < 0.3 && st.area && !st.area.world) return; // same place as last time
+      setCenter(lat, lng, 15);
+    }, err => { done(); if (quiet) londonFallback(); else alert(t('locationFailed', { msg: err.message })); }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
   }
+  $('#locate-skip').onclick = () => { locCard.hidden = true; londonFallback(); };
   $('#btn-locate').onclick = () => locate(false);
   $('#place-form').onsubmit = async e => {
     e.preventDefault(); const q = $('#place').value.trim(); if (!q) return;
@@ -397,11 +452,30 @@
     } catch { alert(t('searchFailed')); }
   };
   $('#radius').value = String(st.radius);
-  $('#radius').onchange = () => { st.radius = Number($('#radius').value); localStorage.setItem('rtc_radius', st.radius); if (st.area && !st.area.world) st.area = { ...st.area, radius: st.radius }; drawCenter(); load(); };
+  // Radius change: fit the map to that radius around the user (or the area centre), reload, then pulse the stores in it
+  // that currently have reductions (active posts, or a predicted window open right now).
+  $('#radius').onchange = () => {
+    st.radius = Number($('#radius').value); localStorage.setItem('rtc_radius', st.radius);
+    const c = st.center || (st.area && !st.area.world ? st.area : null);
+    if (c) { st.area = { lat: c.lat, lng: c.lng, radius: st.radius }; fitMap(L.latLng(c.lat, c.lng).toBounds(st.radius * 2000), { maxZoom: 17, padding: [10, 10] }); }
+    drawCenter(); st.highlightAfterLoad = true; load();
+  };
+  function openNow(s) {
+    const clk = A.localClock(s.timezone);
+    if (!s.prediction || (s.prediction.day && s.prediction.day !== clk.dow)) return false;
+    return A.timedWindows(s.prediction).some(w => clk.hour >= w.start && (w.end == null ? clk.hour < w.start + 1 : clk.hour < w.end));
+  }
+  function highlightReduced() {
+    if (!st.area || st.area.world) return;
+    let n = 0;
+    for (const p of st.posts.values()) if (!p.all_gone_at && inRadius(p)) { alerter.highlight(p.store_id != null ? p.store_id : `${p.lat},${p.lng}`, 'post', postName(p)); n++; }
+    for (const s of st.stores || []) if (s.distance_km <= st.area.radius && openNow(s)) { alerter.highlight(s.id, 'prediction', storeName(s)); n++; }
+    document.body.dataset.highlighted = String(n);
+    renderAll(); renderStores(st.stores || []);
+  }
   $('#show-gone').onchange = renderAll;
   $('#show-pred').onchange = () => renderStores(st.stores || []);
-  function soundBtn() { $('#btn-sound').replaceChildren(st.sound ? '🔔' : '🔇', el('span', { class: 'lbl' }, ' ' + t(st.sound ? 'soundOn' : 'soundOff'))); }
-  $('#btn-sound').onclick = () => { st.sound = !st.sound; localStorage.setItem('rtc_sound', st.sound ? '1' : '0'); soundBtn(); beep(); };
+  $('#btn-sound').onclick = () => beep(); // the only sound in the app
 
   // ---------- Auth ----------
   let registering = false;
@@ -530,7 +604,7 @@
 
   // ---------- Boot ----------
   (async () => {
-    soundBtn(); drawCenter();
+    drawCenter();
     intlBtn();
     const { user, cfg } = bootData || { ...(await api('/api/me')), cfg: await api('/api/config') }; // normally inlined: no API round trips
     st.cfg = cfg; setUser(user);
@@ -540,9 +614,8 @@
     $('#footer-note').replaceChildren(before, predLabel, after || '');
     const [a1, a2] = t('attribution').split('{osm}');
     $('#attribution').replaceChildren(a1, el('a', { href: (cfg.attribution && cfg.attribution.url) || 'https://www.openstreetmap.org/copyright', target: '_blank', rel: 'noopener' }, 'OpenStreetMap'), a2 || '');
-    if (!st.center) { // first visit: ask for the user's location; London if refused/unavailable/unanswered (12 s)
-      showHint(t('locateHint')); locate(true); setTimeout(londonFallback, 12000);
-    }
-    await load(); startLive();
+    // Ask for the location straight away (every visit); London if refused/unavailable/unanswered (12 s) and nothing is saved.
+    locate(true); setTimeout(() => { locCard.hidden = true; londonFallback(); }, 12000);
+    await load(); startLive(); showCities();
   })();
 })();

@@ -117,3 +117,18 @@ table.week td{border-top:1px solid #eee;padding:.3rem;vertical-align:top}
 .intl-toggle{position:absolute;z-index:550;left:10px;bottom:28px;min-height:var(--tap);padding:.4rem .8rem;border-radius:999px;border:2px solid var(--ink);background:#fff;color:var(--ink);font-weight:700;font-size:.9rem;box-shadow:0 2px 6px rgba(0,0,0,.25)}
 .intl-toggle.on{background:var(--yellow)}
 @media (max-width: 800px){.intl-toggle{bottom:calc(var(--peek) + 12px);font-size:.85rem}}
+
+/* Location explainer shown alongside the browser's permission prompt */
+.locate-card{position:absolute;z-index:700;left:50%;top:16px;transform:translateX(-50%);width:min(92%,380px);background:#fff;color:var(--ink);border:3px solid var(--ink);border-radius:12px;padding:.8rem 1rem;box-shadow:0 6px 18px rgba(0,0,0,.3);text-align:center}
+.locate-card p{margin:.4rem 0 .6rem;font-size:.92rem}
+.locate-card button{min-height:var(--tap)}
+/* International mode: megacity shortcuts */
+.city-label{background:var(--yellow);color:var(--ink);border:2px solid var(--ink);border-radius:999px;padding:.15rem .55rem;font-weight:800;font-size:.8rem;white-space:nowrap;box-shadow:0 2px 4px rgba(0,0,0,.3);cursor:pointer;width:auto!important;height:auto!important;transform-origin:center}
+.city-label:hover,.city-label:focus{background:#fff;outline:none}
+/* See all branches */
+.branch-pin{width:14px;height:14px;border-radius:50%;background:var(--yellow);border:2px solid var(--ink);animation:rtc-pulse 1.6s ease-out 6}
+.branch-banner{position:absolute;z-index:560;left:50%;transform:translateX(-50%);top:12px;width:min(94%,520px);background:var(--ink);color:#fff;border-radius:10px;padding:.5rem .8rem;font-size:.9rem;box-shadow:0 4px 12px rgba(0,0,0,.3)}
+.branch-banner button{margin-left:.4rem;min-height:36px}
+.marker-cluster-small,.marker-cluster-medium,.marker-cluster-large{background-color:rgba(255,214,0,.55)!important}
+.marker-cluster-small div,.marker-cluster-medium div,.marker-cluster-large div{background-color:rgba(255,214,0,.95)!important;color:#1d1d1b;font-weight:800}
+@media (prefers-reduced-motion: reduce){.branch-pin{animation:none}}

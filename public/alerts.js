@@ -1,7 +1,7 @@
-/* Reduced to Clear – local "reductions starting" alerts: checkout beep + flashing pin.
+/* Reduced to Clear – local "reductions starting" alerts: a gentle map nudge towards the store + pulsing pin (no sound).
    Pure logic (no DOM/Leaflet) so it is unit-tested in Node; the browser glue lives in app.js.
    Triggers: a new community post at a store, or a store's predicted window starting now (labelled as a prediction).
-   Only for stores inside the visible map bounds at city zoom or closer. One beep per 10 s at most (bursts merge into one);
+   Only for stores inside the visible map bounds at city zoom or closer. At most one map nudge per 10 s, never while the user is moving the map (bursts are batched);
    each store fires at most once per window. */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
@@ -9,7 +9,7 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   const LOCAL_ZOOM = 10, LOCAL_MAX_KM = 60;       // street to city level; never regional/national zoom
   const MAX_PULSING = 8;                          // cities have many stores: at most 8 pins pulse at once, the rest just highlight
-  const BEEP_GAP_MS = 10000;                      // max one beep per 10 s
+  const NUDGE_GAP_MS = 10000, NUDGE_QUIET_MS = 10000, NUDGE_BATCH_MS = 1500; // map nudges: max one per 10 s, not within 10 s of the user moving the map, bursts batched
   const FLASH_MS = 60000;                         // pulse ~60 s, then a steady highlight
   const START_GRACE_H = 10 / 60;                  // "starting now" = within 10 min of the window's start
   const POST_WINDOW_MS = 60 * 60000;              // a store re-alerts for posts at most once an hour
@@ -46,20 +46,33 @@
     return timedWindows(pr).find(w => clock.hour >= w.start && clock.hour < w.start + START_GRACE_H && (w.end == null || clock.hour < w.end)) || null;
   }
 
-  // Throttled beeper: plays at most once per gap; anything arriving inside the gap is merged into one later beep.
-  function createBeeper({ play, gapMs = BEEP_GAP_MS, now = () => Date.now(), setTimer = setTimeout } = {}) {
-    let last = -Infinity, pending = 0, timer = null;
-    const fire = () => { timer = null; last = now(); const n = pending; pending = 0; play(n); };
+  // Gentle "look over here" map nudges instead of sounds. Alerts arriving close together are batched into one move;
+  // at most one move per gap; never while the user is interacting (waits until they've left the map alone for quietMs).
+  function createNudger({ run, batchMs = NUDGE_BATCH_MS, gapMs = NUDGE_GAP_MS, quietMs = NUDGE_QUIET_MS, now = () => Date.now(), setTimer = setTimeout } = {}) {
+    let last = -Infinity, lastUser = -Infinity, pending = [], timer = null;
+    const dueAt = () => Math.max(now() + batchMs, last + gapMs, lastUser + quietMs);
+    function fire() {
+      timer = null;
+      const wait = Math.max(last + gapMs, lastUser + quietMs) - now();
+      if (wait > 0) { timer = setTimer(fire, wait); return; } // the user touched the map meanwhile: wait for quiet
+      last = now(); const batch = pending; pending = []; run(batch);
+    }
     return {
-      trigger() {
-        pending++;
-        if (timer) return 'merged';
-        const wait = last + gapMs - now();
-        if (wait <= 0) { fire(); return 'played'; }
-        timer = setTimer(fire, wait); return 'scheduled';
-      },
-      get pending() { return pending; },
+      trigger(point) { pending.push(point); if (timer) return 'merged'; timer = setTimer(fire, dueAt() - now()); return 'scheduled'; },
+      userActed() { lastUser = now(); },
+      get pending() { return pending.length; },
     };
+  }
+  // Where a nudge goes: a third of the way from the current centre towards the alerted stores, one zoom level in if
+  // they still all fit, else the same zoom, else (only if needed) one level out centred on them. Never a big jump.
+  // fits(center, zoom) -> whether every point is visible with that view (supplied by the map).
+  function nudgeTarget({ center, zoom, points, fits, shift = 0.35, maxZoom = 16 }) {
+    if (!points || !points.length) return null;
+    const c = { lat: points.reduce((a, p) => a + p.lat, 0) / points.length, lng: points.reduce((a, p) => a + p.lng, 0) / points.length };
+    const toward = { lat: center.lat + (c.lat - center.lat) * shift, lng: center.lng + (c.lng - center.lng) * shift };
+    if (zoom < maxZoom && fits(toward, zoom + 1)) return { ...toward, zoom: zoom + 1 };
+    if (fits(toward, zoom)) return { ...toward, zoom };
+    return { ...c, zoom: Math.max(zoom - 1, LOCAL_ZOOM) };
   }
 
   // Decides which stores alert. `fired` remembers store+window keys so each store fires once per window.
@@ -91,6 +104,8 @@
         mark(s.id, 'prediction', s.name, holdMs);
         return { storeId: s.id, kind: 'prediction', name: s.name, window: w };
       },
+      // Explicit highlight (e.g. after changing the radius): pulse regardless of the once-per-window rule.
+      highlight(storeId, kind, label, holdMs = FLASH_MS) { mark(storeId, kind, label, holdMs); return { storeId, kind, name: label }; },
       // 'flash' (pulsing, with seconds elapsed for CSS animation-delay), 'steady', or null
       state(storeId) {
         const f = flashing.get(storeId); if (!f) return null;
@@ -101,6 +116,6 @@
     };
   }
 
-  return { isLocalView, inBounds, localClock, timedWindows, windowStartingNow, createBeeper, createAlerter, DOW,
-    LOCAL_ZOOM, LOCAL_MAX_KM, MAX_PULSING, BEEP_GAP_MS, FLASH_MS };
+  return { isLocalView, inBounds, localClock, timedWindows, windowStartingNow, createNudger, nudgeTarget, createAlerter, DOW,
+    LOCAL_ZOOM, LOCAL_MAX_KM, MAX_PULSING, NUDGE_GAP_MS, NUDGE_QUIET_MS, FLASH_MS };
 });

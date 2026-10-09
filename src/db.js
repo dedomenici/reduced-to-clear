@@ -55,6 +55,8 @@ const MIGRATIONS = [
      tile TEXT PRIMARY KEY, status TEXT NOT NULL, fetched_at TEXT, next_try_at TEXT, stores INTEGER NOT NULL DEFAULT 0);`,
   // 5: English label for non-Latin store names (OSM name:en / brand:en), shown as '全聯福利中心 (PX Mart)'.
   `ALTER TABLE stores ADD COLUMN name_en TEXT;`,
+  // 6: 'See all branches' looks stores up by chain.
+  `CREATE INDEX IF NOT EXISTS stores_chain ON stores(chain);`,
 ];
 
 async function migrate(db) {

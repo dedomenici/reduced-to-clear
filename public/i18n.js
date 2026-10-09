@@ -7,7 +7,9 @@
     en: {
       appName: 'Reduced to Clear',
       nearMe: 'Near me', useMyLocation: 'Use my location', searchPlaceholder: 'Postcode, town or place…', searchLabel: 'Search for a place', go: 'Go',
-      radius: 'Radius', soundOn: 'Sound on', soundOff: 'Sound off', toggleSound: 'Toggle sound (checkout beep when reductions start nearby)', pingTitle: 'Beep when reductions start at stores on your map',
+      radius: 'Radius', beepBtn: 'Beep', beepTitle: 'Play the checkout beep (just for fun – the app never beeps on its own)',
+      locateCardTitle: '📍 Find reductions near you', locateCardText: 'Your browser will ask to share your location. It\'s only used to centre the map on shops near you.', locateSkip: 'Not now (show London)',
+      seeBranches: '🏬 See all branches', branchesShown: 'Showing {n} {chain} branches we know about.', branchesShown1: 'Showing the 1 {chain} branch we know about.', branchesNote: 'Only areas opened on the map so far are included, so there are probably more.', branchesCapped: 'Limited to the first {cap}.', branchesNone: 'No other {chain} branches known yet.', close: 'Close', flyTo: 'Fly to {city} and load its supermarkets',
       intlOff: '🌍 Go international', intlOn: '🌍 International: on', intlTitle: 'Load reductions anywhere in the world, not just within ~50 km of you',
       intlHint: 'That\'s outside your local area (~50 km). Tap "🌍 Go international" to load it.',
       londonFallback: 'Showing London. Tap 📍 Near me (allow location) or search a place to see your area.',
@@ -21,7 +23,6 @@
       noneWorldwide: 'No reductions reported in the last 48 hours.',
       footer: 'Posts are community reports; check in store. {pred} pins (dashed purple, or faint for generic estimates) are estimates, not confirmed reductions.',
       attribution: 'Map and store data © {osm} contributors (ODbL).',
-      locateHint: 'Showing the latest posts worldwide. Tap 📍 or search for a place to see reductions near you.',
       locating: 'Finding your location…', storesLoading: 'Loading supermarkets for this area from OpenStreetMap…',
       storesUnavailable: 'OpenStreetMap is busy right now, so some supermarkets for this area are missing. Trying again shortly.',
       storesLimited: 'Some supermarkets for this area will load later (OpenStreetMap fair-use limits).',

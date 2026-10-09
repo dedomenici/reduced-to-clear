@@ -27,18 +27,28 @@ test('store-local clock and "window starting now" (within 10 min, prediction mus
   assert.deepStrictEqual(A.timedWindows(learned).map(w => w.basis), ['learned']);
 });
 
-test('beeper: max one beep per 10 s, bursts merge into a single later beep', () => {
-  let clock = 0; const timers = []; const plays = [];
-  const b = A.createBeeper({ play: n => plays.push({ t: clock, n }), now: () => clock, setTimer: (fn, ms) => timers.push({ fn, due: clock + ms }) });
-  assert.strictEqual(b.trigger(), 'played');
-  clock = 2000; assert.strictEqual(b.trigger(), 'scheduled');
-  clock = 3000; assert.strictEqual(b.trigger(), 'merged'); assert.strictEqual(b.trigger(), 'merged');
-  assert.strictEqual(plays.length, 1); assert.strictEqual(timers.length, 1); assert.strictEqual(timers[0].due, 10000);
-  clock = 10000; timers.shift().fn();
-  assert.deepStrictEqual(plays, [{ t: 0, n: 1 }, { t: 10000, n: 3 }]);
-  clock = 15000; assert.strictEqual(b.trigger(), 'scheduled'); // still inside the gap after the merged beep
-  clock = 30000; timers.shift().fn(); assert.strictEqual(plays.length, 3);
-  clock = 45000; assert.strictEqual(b.trigger(), 'played');
+test('nudger: batches bursts into one map move, max one per 10 s, waits until the user has left the map alone for 10 s', () => {
+  let clock = 0; const timers = []; const runs = [];
+  const n = A.createNudger({ run: b => runs.push({ t: clock, ids: b.map(x => x.id) }), now: () => clock, setTimer: (fn, ms) => timers.push({ fn, due: clock + ms }) });
+  const tick = () => { timers.sort((a, b) => a.due - b.due); const x = timers.shift(); clock = x.due; x.fn(); };
+  assert.strictEqual(n.trigger({ id: 1 }), 'scheduled'); clock = 500; assert.strictEqual(n.trigger({ id: 2 }), 'merged');
+  tick(); assert.deepStrictEqual(runs, [{ t: 1500, ids: [1, 2] }]);
+  clock = 3000; n.trigger({ id: 3 }); tick(); assert.strictEqual(runs[1].t, 11500, 'gap: one move per 10 s');
+  clock = 20000; n.userActed(); clock = 21000; n.trigger({ id: 4 });
+  while (timers.length) tick();
+  assert.deepStrictEqual(runs[2], { t: 30000, ids: [4] }, 'deferred until 10 s after the user last touched the map');
+  clock = 45000; n.trigger({ id: 5 }); clock = 45800; n.userActed(); // user grabs the map while a nudge is queued
+  while (timers.length) tick(); assert.strictEqual(runs[3].t, 55800);
+});
+
+test('nudgeTarget: a third of the way towards the stores; +1 zoom if they fit, same zoom, else one level out on them', () => {
+  const center = { lat: 0, lng: 0 }, points = [{ lat: 0.3, lng: 0.3 }, { lat: 0.3, lng: 0.9 }];
+  let t = A.nudgeTarget({ center, zoom: 13, points, fits: () => true });
+  assert.strictEqual(t.zoom, 14); assert.ok(Math.abs(t.lat - 0.105) < 1e-9 && Math.abs(t.lng - 0.21) < 1e-9);
+  t = A.nudgeTarget({ center, zoom: 13, points, fits: (c, z) => z <= 13 }); assert.strictEqual(t.zoom, 13);
+  t = A.nudgeTarget({ center, zoom: 13, points, fits: () => false }); assert.deepStrictEqual(t, { lat: 0.3, lng: 0.6, zoom: 12 });
+  assert.strictEqual(A.nudgeTarget({ center, zoom: 16, points, fits: () => true }).zoom, 16, 'never past street level');
+  assert.strictEqual(A.nudgeTarget({ center, zoom: 13, points: [], fits: () => true }), null);
 });
 
 test('alerter: posts and predictions fire once per store per window, only in view at local zoom; flash 60 s then steady', () => {
@@ -73,15 +83,17 @@ test('city zoom with many stores: alerts fire, but at most 8 pins pulse at once 
   const city = { zoom: 11, widthKm: 45, bounds: { s: 48.7, n: 49.0, w: 2.1, e: 2.6 } };
   const fired = [];
   for (let i = 0; i < 12; i++) fired.push(al.post({ id: i, store_id: 100 + i, store_name: 'S' + i, lat: 48.8 + i * 0.01, lng: 2.3 }, city));
-  assert.strictEqual(fired.filter(Boolean).length, 12, 'every store in view alerts (beeps are throttled separately)');
+  assert.strictEqual(fired.filter(Boolean).length, 12, 'every store in view alerts (map nudges are batched separately)');
   const modes = fired.map(a => al.state(a.storeId).mode);
   assert.strictEqual(modes.filter(m => m === 'flash').length, A.MAX_PULSING);
   assert.deepStrictEqual(modes.slice(A.MAX_PULSING), Array(12 - A.MAX_PULSING).fill('steady'));
   clock += 61000; // first pulses have finished: a new alert may pulse again
   assert.strictEqual(al.post({ id: 99, store_id: 199, store_name: 'Late', lat: 48.85, lng: 2.35 }, city) && al.state(199).mode, 'flash');
-  // and many triggers in one burst still make a single beep (merged by the throttle)
-  let t = 0; const plays = []; const timers = [];
-  const b = A.createBeeper({ play: n => plays.push(n), now: () => t, setTimer: (fn, ms) => timers.push(fn) });
-  for (let i = 0; i < 12; i++) b.trigger();
-  assert.deepStrictEqual(plays, [1]); t = 10000; timers.shift()(); assert.deepStrictEqual(plays, [1, 11]);
+  // and many triggers in one burst make a single map move
+  const runs = []; const timers = [];
+  const n = A.createNudger({ run: b => runs.push(b.length), now: () => 0, setTimer: fn => timers.push(fn) });
+  for (let i = 0; i < 12; i++) n.trigger({ id: i });
+  timers.shift()(); assert.deepStrictEqual(runs, [12]);
+  // explicit highlight (radius change) pulses even a store that already alerted
+  assert.strictEqual(al.highlight(100, 'post', 'S0').storeId, 100); assert.ok(al.state(100));
 });

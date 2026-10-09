@@ -74,20 +74,19 @@ const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000
     results.sheetToggles = await page.$eval('#sheet', s => !s.classList.contains('open'));
     results.summary = await page.$eval('#sheet-summary', s => s.textContent);
     await page.screenshot({ path: 'test/screenshot-mobile.png' }); // final: map with the new pin + peeking sheet
-    // Live local alert: another user posts at a store on this phone's map view -> checkout beep + pin highlight.
+    // Live local alert: another user posts at a store on this phone's map view -> gentle map nudge + pin highlight (no sound).
     // Reduced motion is requested, so the pin must be highlighted without the pulse animation.
     await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
-    results.soundDefaultOn = await page.$eval('#btn-sound', b => b.textContent.includes('🔔')); // new user: sound on by default
-    await page.tap('#btn-sound'); // user turns it off...
     await page.reload({ waitUntil: 'networkidle2' }); await page.waitForSelector('#feed'); await sleep(1500);
-    results.offChoiceKept = await page.evaluate(() => localStorage.getItem('rtc_sound') === '0' && document.querySelector('#btn-sound').textContent.includes('🔇') && document.body.dataset.loadBeep === 'off');
-    await page.tap('#btn-sound'); // ...and back on (plays a preview beep)
-    results.soundOn = await page.evaluate(() => localStorage.getItem('rtc_sound') === '1');
-    const beeps0 = await page.evaluate(() => Number(document.body.dataset.beeps || 0));
+    results.noAutoBeeps = await page.evaluate(() => !document.body.dataset.beeps && localStorage.getItem('rtc_sound') === null && document.querySelector('#btn-sound').textContent.includes('Beep'));
+    const nudges0 = await page.evaluate(() => Number(document.body.dataset.nudges || 0));
     const other = await require('./helpers/poster')(browser, srv.base, config.sitePassword, 'Phone Neighbour');
     results.alertPostStatus = await other.post(51.5249, -0.0872, 'Alert Test Express');
     await page.waitForSelector('.pin.alerted', { timeout: 8000 });
-    await page.waitForFunction(b => Number(document.body.dataset.beeps || 0) > b, { timeout: 12000 }, beeps0);
+    await page.waitForFunction(n => Number(document.body.dataset.nudges || 0) > n, { timeout: 15000 }, nudges0);
+    results.nudgeInstant = await page.evaluate(() => !window.rtcMap._flyToFrame && !window.rtcMap._animatingZoom); // reduced motion: jump, no fly
+    results.noBeepOnAlert = await page.evaluate(() => !document.body.dataset.beeps);
+    await page.tap('#btn-sound'); results.beepButton = await page.evaluate(() => document.body.dataset.beeps === '1');
     results.alert = await page.evaluate(() => { const t = document.querySelector('#alert-toast'), r = t.getBoundingClientRect(), pin = document.querySelector('.pin.alerted');
       return { toast: t.textContent, toastOnScreen: !t.hidden && r.top >= 0 && r.bottom <= innerHeight && r.right <= innerWidth, reducedMotionNoPulse: getComputedStyle(pin).animationName === 'none' }; });
     await page.screenshot({ path: 'test/screenshot-mobile-alert.png' });
@@ -100,7 +99,7 @@ const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000
   const bad = !results.gateShown || !results.manifest.ok || !results.iconsOk || !results.noHorizontalScroll || !results.mapFullWidth || !results.sheetCollapsed
     || !results.fabVisible || !results.intlToggle.onScreen || !results.intlToggle.clearOfFab || !results.intlToggle.aboveSheet || results.smallTouchTargets.length || !results.formFullScreen || results.cameraInput.capture !== 'environment'
     || !results.formInputsNoZoom || !results.sheetOpensAfterPost || !results.sheetToggles || results.postHasPhoto !== true || errors.length
-    || !results.soundDefaultOn || !results.offChoiceKept || !results.soundOn || results.alertPostStatus !== 201 && results.alertPostStatus !== 200 || !/Alert Test Express/.test(results.alert.toast) || !results.alert.toastOnScreen || !results.alert.reducedMotionNoPulse;
+    || !results.noAutoBeeps || !results.nudgeInstant || !results.noBeepOnAlert || !results.beepButton || results.alertPostStatus !== 201 && results.alertPostStatus !== 200 || !/Alert Test Express/.test(results.alert.toast) || !results.alert.toastOnScreen || !results.alert.reducedMotionNoPulse;
   if (bad) { console.error('MOBILE SMOKE FAILED'); process.exit(1); }
   console.log('MOBILE SMOKE PASSED');
 })().catch(e => { console.error('MOBILE SMOKE FAILED:', e.message); process.exit(1); });

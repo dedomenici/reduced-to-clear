@@ -127,6 +127,7 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
   // ---------- Static (behind gate) ----------
   app.get('/a/:hash/:file', sendAsset);
   app.use(assets.leaflet.dir, express.static(path.join(path.dirname(require.resolve('leaflet/package.json')), 'dist'), { maxAge: '365d', immutable: true }));
+  app.use(assets.cluster.dir, express.static(path.join(path.dirname(require.resolve('leaflet.markercluster/package.json')), 'dist'), { maxAge: '365d', immutable: true }));
   app.use(express.static(path.join(config.ROOT, 'public'), { index: false })); // unversioned fallbacks (revalidated via ETag)
 
   // Photos (behind the gate). Keys are random and content never changes, so cache hard in the browser only.
@@ -190,7 +191,7 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
   const clientConfig = () => ({ chainsByCountry: config.chainsByCountry, photosEnabled, maxPhotoBytes: config.limits.maxPhotoBytes,
     attribution: { text: ATTRIBUTION, url: ATTRIBUTION_URL },
     // non-secret diagnostics (behind the gate): lets the owner confirm what the host's env actually turned on
-    server: { schema: db.schemaVersion, db: db.kind, photoStorage, photosEnabledFrom: opts.photosEnabled !== undefined ? 'option' : config.photosEnabledFrom, osmOnDemand: osm.options.enabled, osm: osm.stats, assets: assets.version } });
+    server: { schema: db.schemaVersion, db: db.kind, photoStorage, photosEnabledFrom: opts.photosEnabled !== undefined ? 'option' : config.photosEnabledFrom, osmOnDemand: osm.options.enabled, osm: osm.stats, assets: assets.version }, cluster: assets.cluster });
   app.get('/api/config', (req, res) => res.json(clientConfig()));
   // The app page: versioned asset URLs + the user and config inlined, so the first load makes no /api/me or /api/config call.
   const indexTemplate = fs.readFileSync(path.join(config.ROOT, 'views', 'index.html'), 'utf8')
@@ -369,6 +370,17 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
     const seen = await seenTimesFor(stores.map(s => s.id));
     res.json({ stores: stores.map(s => ({ ...s, prediction: predict.predictStore(withChainKey(s), predict.nowDow(s.timezone, at), seen.get(s.id), chainRows) })),
       pending: !!area.pending, limited: !!area.limited, osmUnavailable: !!area.unavailable, attribution: ATTRIBUTION });
+  });
+  // 'See all branches': every store of a chain we know about (only areas someone has opened so far are in the DB).
+  // Indexed on stores(chain) and capped so one tap can't read the whole table from Turso.
+  const BRANCH_CAP = 2000;
+  app.get('/api/chains/:chain/stores', async (req, res) => {
+    const chain = String(req.params.chain || '').slice(0, 60);
+    if (!chain || chain === 'Other') return res.status(400).json({ error: 'chain required' });
+    const rows = await db.all('SELECT id, name, name_en, chain, lat, lng FROM stores WHERE chain = ? LIMIT ?', [chain, BRANCH_CAP + 1]);
+    res.set('Cache-Control', 'private, max-age=300');
+    res.json({ chain, stores: rows.slice(0, BRANCH_CAP), capped: rows.length > BRANCH_CAP, cap: BRANCH_CAP,
+      note: 'Only branches in areas that have been opened on the map so far are known.' });
   });
   app.get('/api/stores/:id/predictions', async (req, res) => {
     const s = await db.get('SELECT * FROM stores WHERE id = ?', [Number(req.params.id)]);

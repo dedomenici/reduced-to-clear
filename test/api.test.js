@@ -505,3 +505,40 @@ test('performance: compression, versioned immutable assets, boot data inlined, a
   assert.match(s.headers.get('content-type'), /^text\/event-stream/); assert.strictEqual(s.headers.get('content-encoding'), null);
   ac.abort();
 });
+
+test('see all branches: indexed chain lookup, capped, gated; markercluster self-hosted; cities module versioned', async () => {
+  await gate('br');
+  const db = app.locals.db;
+  const plan = (await db.all('EXPLAIN QUERY PLAN SELECT id, name, name_en, chain, lat, lng FROM stores WHERE chain = ? LIMIT 2001', ['Tesco'])).map(r => r.detail).join(' | ');
+  assert.match(plan, /USING INDEX stores_chain/, plan);
+  const total = (await db.get("SELECT COUNT(*) AS n FROM stores WHERE chain = 'Tesco'")).n;
+  let r = await req('br', 'GET', '/api/chains/Tesco/stores');
+  assert.strictEqual(r.status, 200); assert.strictEqual(r.data.chain, 'Tesco');
+  assert.strictEqual(r.data.stores.length, Math.min(total, 2000)); assert.strictEqual(r.data.capped, total > 2000); assert.strictEqual(r.data.cap, 2000);
+  assert.ok(r.data.stores.every(s => s.chain === 'Tesco' && Number.isFinite(s.lat) && !('address' in s)));
+  assert.match(r.data.note, /opened on the map/);
+  // cap: insert more than 2000 branches of a test chain
+  const now = new Date().toISOString();
+  const cols = (await db.all('PRAGMA table_info(stores)')).map(c => c.name);
+  const many = Array.from({ length: 2005 }, (_, i) => ['CapChain', 'CapChain ' + i, 10 + i / 1000, 20]);
+  for (let i = 0; i < many.length; i += 500) {
+    const chunk = many.slice(i, i + 500);
+    await db.run(`INSERT INTO stores (chain, name, lat, lng${cols.includes('created_at') ? ', created_at' : ''}) VALUES ${chunk.map(() => cols.includes('created_at') ? '(?,?,?,?,?)' : '(?,?,?,?)').join(',')}`,
+      chunk.flatMap(c => cols.includes('created_at') ? [...c, now] : c));
+  }
+  r = await req('br', 'GET', '/api/chains/CapChain/stores');
+  assert.strictEqual(r.data.stores.length, 2000); assert.strictEqual(r.data.capped, true);
+  await db.run("DELETE FROM stores WHERE chain = 'CapChain'");
+  assert.strictEqual((await req('br', 'GET', '/api/chains/Other/stores')).status, 400);
+  assert.strictEqual((await req('br', 'GET', '/api/chains/NoSuchChain/stores')).data.stores.length, 0);
+  assert.strictEqual((await req('nobody2', 'GET', '/api/chains/Tesco/stores')).status, 401);
+  // markercluster (lazy-loaded) and the cities module
+  const cfg = (await req('br', 'GET', '/api/config')).data;
+  r = await req('br', 'GET', cfg.cluster.js); assert.strictEqual(r.status, 200); assert.match(r.headers.get('cache-control'), /immutable/);
+  assert.strictEqual((await req('br', 'GET', cfg.cluster.css)).status, 200);
+  const html = (await req('br', 'GET', '/')).data;
+  assert.match(html, /<script defer src="\/a\/[0-9a-f]{10}\/cities\.js"><\/script>/);
+  const C = require('../public/cities.js');
+  for (const n of ['London', 'Paris', 'Berlin', 'Madrid', 'Amsterdam', 'New York', 'Toronto', 'Tokyo', 'Osaka', 'Seoul', 'Taipei', 'Kaohsiung', 'Hong Kong', 'Singapore', 'Shanghai', 'Beijing', 'Bangkok', 'Sydney', 'Melbourne', 'Dublin', 'Mexico City', 'São Paulo', 'Mumbai', 'Istanbul', 'Dubai', 'Lagos', 'Johannesburg'])
+    assert.ok(C.CITIES.some(c => c.name === n && Math.abs(c.lat) <= 90 && Math.abs(c.lng) <= 180), n);
+});
