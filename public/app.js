@@ -2,6 +2,7 @@
 (() => {
   const $ = s => document.querySelector(s);
   const { t, money, countryName } = window.I18N;
+  const A = window.RTC_ALERTS;
   I18N.apply();
   // No default city: start at the user's saved/current location; otherwise show the world and the latest posts everywhere.
   const st = {
@@ -75,7 +76,8 @@
     for (const p of list) {
       feed.append(renderPost(p));
       const cls = p.all_gone_at ? 'gone' : st.newIds.has(p.id) ? 'new' : '';
-      const m = L.marker([p.lat, p.lng], { icon: L.divIcon({ className: '', html: `<div class="pin ${cls}"></div>`, iconSize: [26, 26], iconAnchor: [13, 26] }) });
+      const al = p.all_gone_at ? '' : alertAttrs(p.store_id);
+      const m = L.marker([p.lat, p.lng], { zIndexOffset: al ? 1000 : 0, icon: L.divIcon({ className: '', html: `<div class="pin ${cls}${al}></div>`, iconSize: [26, 26], iconAnchor: [13, 26] }) });
       m.bindPopup(() => renderPost(p, true)); m.addTo(postLayer);
     }
   }
@@ -139,7 +141,8 @@
       const pr = s.prediction;
       if (!hasLearned(pr) && !pr.chain.length && !pr.generic) continue;
       const kind = hasLearned(pr) ? 'learned' : pr.chain.length ? '' : 'generic';
-      const m = L.marker([s.lat, s.lng], { icon: L.divIcon({ className: '', html: `<div class="pred-pin ${kind}" title="${t('prediction')}"></div>`, iconSize: [18, 18] }) });
+      const al = alertAttrs(s.id);
+      const m = L.marker([s.lat, s.lng], { zIndexOffset: al ? 900 : 0, icon: L.divIcon({ className: '', html: `<div class="pred-pin ${kind}${al} title="${t('prediction')}"></div>`, iconSize: al ? [22, 22] : [18, 18] }) });
       m.bindTooltip(t('predTooltip', { name: s.name }));
       m.bindPopup(() => {
         const div = el('div', {}, el('span', { class: 'pred-label' }, t('prediction')), el('h3', {}, s.name), el('div', { class: 'small muted' }, t('predFor', { day: pr.day })));
@@ -183,7 +186,7 @@
     const r = await api(`/api/stores?lat=${st.center.lat}&lng=${st.center.lng}&radius_km=${st.radius}`).catch(() => ({ stores: [] }));
     clearTimeout(slow);
     if (seq !== loadSeq) return;
-    st.stores = r.stores; renderStores(r.stores);
+    st.stores = r.stores; renderStores(r.stores); checkPredictions();
     if (r.pending && attempt < 6) { areaStatus(t('storesLoading')); storeRetry = setTimeout(() => loadStores(seq, attempt + 1), 4000); }
     else if (r.osmUnavailable) { areaStatus(t('storesUnavailable')); if (attempt < 8) storeRetry = setTimeout(() => loadStores(seq, attempt + 1), 75000); }
     else areaStatus(r.limited ? t('storesLimited') : null);
@@ -207,11 +210,68 @@
       });
     } catch { /* audio unavailable */ }
   }
+  // Checkout-style beep, synthesised (no sample): one short ~1.35 kHz square blip with a soft envelope.
+  function beep() {
+    document.body.dataset.beeps = String(Number(document.body.dataset.beeps || 0) + 1); // observable by smoke tests
+    if (!st.sound) return;
+    try {
+      const ctx = ping.ctx || (ping.ctx = new (window.AudioContext || window.webkitAudioContext)());
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+      const o = ctx.createOscillator(), g = ctx.createGain(), f = ctx.createBiquadFilter();
+      o.type = 'square'; o.frequency.value = 1350; f.type = 'lowpass'; f.frequency.value = 4000;
+      const t0 = ctx.currentTime + 0.01; g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.12, t0 + 0.005);
+      g.gain.setValueAtTime(0.12, t0 + 0.1); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.13);
+      o.connect(f).connect(g).connect(ctx.destination); o.start(t0); o.stop(t0 + 0.15);
+    } catch { /* audio unavailable */ }
+  }
+  const beeper = A.createBeeper({ play: beep });
+  const alerter = A.createAlerter();
+  function alertAttrs(storeId) {
+    const a = storeId == null ? null : alerter.state(storeId); if (!a) return '"';
+    return a.mode === 'flash' ? ` alerted alert-flash" style="animation-delay:-${a.elapsedS.toFixed(1)}s"` : ' alerted"';
+  }
+  // The visible map, for "only local, only in view" checks.
+  function mapView() {
+    const b = map.getBounds(), c = b.getCenter();
+    return { zoom: map.getZoom(), widthKm: map.distance([c.lat, b.getWest()], [c.lat, b.getEast()]) / 1000,
+      bounds: { s: b.getSouth(), n: b.getNorth(), w: L.Util.wrapNum(b.getWest(), [-180, 180], true), e: L.Util.wrapNum(b.getEast(), [-180, 180], true) } };
+  }
+  let toastTimer = null;
+  function toast(alerts) {
+    const box = $('#alert-toast'); if (!box || !alerts.length) return;
+    const pred = alerts.filter(a => a.kind === 'prediction'), posts = alerts.filter(a => a.kind === 'post');
+    const parts = [];
+    if (posts.length) parts.push(el('div', {}, '🛒 ' + (posts.length === 1 ? t('alertPost', { name: posts[0].name }) : t('alertPostMany', { n: posts.length }))));
+    if (pred.length) parts.push(el('div', {}, el('span', { class: 'pred-label' }, t('prediction')), ' ' + (pred.length === 1 ? t('alertPred', { name: pred[0].name }) : t('alertPredMany', { n: pred.length }))));
+    box.replaceChildren(...parts); box.hidden = false;
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { box.hidden = true; }, 10000);
+  }
+  // (b) predicted windows starting now, for stores on screen (only while the prediction layer is shown).
+  let lastDayReload = 0;
+  function checkPredictions() {
+    if (!st.center || !st.stores || !st.stores.length || !$('#show-pred').checked) return;
+    const view = mapView(), fired = [];
+    for (const s of st.stores) { const a = alerter.prediction(s, view); if (a) fired.push(a); }
+    if (fired.length) { beeper.trigger(); toast(fired); }
+    if (fired.length || st.stores.some(s => alerter.state(s.id))) renderStores(st.stores);
+    // Predictions are for the store's current day: refetch after midnight.
+    const s0 = st.stores[0];
+    if (s0.prediction && A.localClock(s0.timezone).dow !== s0.prediction.day && Date.now() - lastDayReload > 600000) { lastDayReload = Date.now(); loadStores(loadSeq, 0); }
+  }
+  setInterval(checkPredictions, 30000);
+  map.on('moveend', checkPredictions);
+  // (a) a new community post: beep + flash if the store is on the local map view; otherwise the old two-note ping.
   function onNewPost(p) {
     if (st.posts.has(p.id) || !inRadius(p)) return;
+    let alert = null;
     if (st.user && p.user_id === st.user.id) p.mine = true;
-    else { st.newIds.add(p.id); ping(); document.title = t('newTitle'); }
+    else {
+      st.newIds.add(p.id); document.title = t('newTitle');
+      alert = alerter.post(p, mapView());
+      if (alert) { beeper.trigger(); toast([alert]); } else ping();
+    }
     st.posts.set(p.id, p); renderAll();
+    if (alert) renderStores(st.stores || []);
   }
   let pollTimer = null;
   function startLive() {
@@ -251,7 +311,7 @@
   $('#show-gone').onchange = renderAll;
   $('#show-pred').onchange = () => renderStores(st.stores || []);
   function soundBtn() { $('#btn-sound').replaceChildren(st.sound ? '🔔' : '🔇', el('span', { class: 'lbl' }, ' ' + t(st.sound ? 'soundOn' : 'soundOff'))); }
-  $('#btn-sound').onclick = () => { st.sound = !st.sound; localStorage.setItem('rtc_sound', st.sound ? '1' : '0'); soundBtn(); ping(); };
+  $('#btn-sound').onclick = () => { st.sound = !st.sound; localStorage.setItem('rtc_sound', st.sound ? '1' : '0'); soundBtn(); beep(); };
 
   // ---------- Auth ----------
   let registering = false;

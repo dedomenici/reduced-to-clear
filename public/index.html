@@ -34,6 +34,7 @@
 <main>
   <div id="map" data-i18n-aria-label="mapLabel" aria-label="Map"></div>
   <div id="map-hint" class="map-hint" hidden></div>
+  <div id="alert-toast" class="alert-toast" role="status" aria-live="polite" hidden></div>
   <button id="fab-post" class="fab" data-i18n-aria-label="postFab" aria-label="Post reductions">＋</button>
   <aside id="sheet" class="sheet" data-i18n-aria-label="feedLabel" aria-label="Reductions feed">
     <button id="sheet-handle" class="sheet-handle" aria-expanded="false" aria-controls="sheet-body">
@@ -106,6 +107,7 @@
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <script src="/i18n.js"></script>
+<script src="/alerts.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

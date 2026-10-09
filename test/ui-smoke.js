@@ -17,8 +17,14 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const srv = BASE ? null : await tempServer({ env: { PHOTOS_ENABLED: 'false', OVERPASS_URLS: `http://127.0.0.1:${mock.address().port}/api/interpreter`, OVERPASS_MIN_INTERVAL_MS: '0' } }); if (srv) BASE = srv.base;
   const browser = await puppeteer.launch({ executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox'] });
   const errors = [];
-  async function open(where = { latitude: 51.5246, longitude: -0.0876 }) { // default: the user is in London (Old Street)
+  async function open(where = { latitude: 51.5246, longitude: -0.0876 }, opts = {}) { // default: the user is in London (Old Street)
     const ctx = await browser.createBrowserContext(); const page = await ctx.newPage();
+    if (opts.fakeNow) await page.evaluateOnNewDocument(target => { // shift the page clock (time of day) for prediction-alert tests
+      const OFF = target - Date.now(), RealDate = Date;
+      class FakeDate extends RealDate { constructor(...a) { if (a.length) super(...a); else super(RealDate.now() + OFF); } static now() { return RealDate.now() + OFF; } }
+      window.Date = FakeDate;
+    }, opts.fakeNow);
+    if (opts.sound) await page.evaluateOnNewDocument(() => localStorage.setItem('rtc_sound', '1'));
     if (where) { await ctx.overridePermissions(new URL(BASE).origin, ['geolocation']); await page.setGeolocation(where); }
     await page.setViewport({ width: 1300, height: 850 });
     page.on('pageerror', e => errors.push(e.message));
@@ -85,6 +91,39 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   await paris.waitForFunction(() => document.querySelector('#feed').textContent.includes('Paris test'));
   world.postShowsCurrency = await paris.$eval('#feed', n => n.textContent.includes('(EUR)'));
   await paris.screenshot({ path: 'test/screenshot-paris.png' });
+  // ---- Local alerts: checkout beep + flashing pin (prediction starting now; new post in view; never at city zoom) ----
+  const parisTodayAt = (h, m) => { // epoch ms for h:m today in Europe/Paris
+    const p = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit', timeZoneName: 'shortOffset' }).formatToParts(new Date()).map(x => [x.type, x.value]));
+    const off = (p.timeZoneName.match(/GMT([+-]\d+)?/)[1] || '0') * 60;
+    return Date.UTC(+p.year, +p.month - 1, +p.day, h, m) - off * 60000;
+  };
+  const alerts = {};
+  const beepsOf = pg => pg.evaluate(() => Number(document.body.dataset.beeps || 0));
+  const lp = await open({ latitude: 48.8566, longitude: 2.3522 }, { fakeNow: parisTodayAt(14, 1), sound: true }); // Carrefour FR window 14:00
+  await lp.waitForSelector('.pred-pin.alerted.alert-flash', { timeout: 15000 });
+  alerts.predictionToast = await lp.$eval('#alert-toast', n => n.textContent);
+  alerts.predictionPulse = await lp.$eval('.pred-pin.alerted', n => getComputedStyle(n).animationName);
+  alerts.predictionBeeps = await beepsOf(lp);
+  await lp.screenshot({ path: 'test/screenshot-alert-prediction.png' });
+  const neighbour = await require('./helpers/poster')(browser, BASE, config.sitePassword, 'Paris Neighbour');
+  for (let i = 0; i < 4; i++) { await lp.click('.leaflet-control-zoom-out'); await sleep(400); } // zoom 11: city level
+  let b0 = await beepsOf(lp);
+  await neighbour.post(48.8580, 2.3545, 'Alert City Zoom');
+  await lp.waitForFunction(() => document.querySelector('#feed').textContent.includes('Alert City Zoom'), { timeout: 8000 });
+  await sleep(11000); // longer than the beep throttle, so a (wrong) merged beep would have played by now
+  alerts.cityZoomBeeps = (await beepsOf(lp)) - b0;
+  alerts.cityZoomFlash = await lp.evaluate(() => document.querySelectorAll('.pin.alerted').length);
+  for (let i = 0; i < 4; i++) { await lp.click('.leaflet-control-zoom-in'); await sleep(400); }
+  b0 = await beepsOf(lp);
+  await neighbour.post(48.8570, 2.3528, 'Alert Local Bakery');
+  await lp.waitForSelector('.pin.alerted.alert-flash', { timeout: 8000 });
+  await lp.waitForFunction(b => Number(document.body.dataset.beeps || 0) > b, { timeout: 12000 }, b0);
+  alerts.localPostToast = await lp.$eval('#alert-toast', n => n.textContent);
+  alerts.localPostPulse = await lp.$eval('.pin.alerted', n => getComputedStyle(n).animationName);
+  await lp.screenshot({ path: 'test/screenshot-alert-post.png' });
+  await neighbour.close();
+  const alertsOk = /PREDICTION/.test(alerts.predictionToast) && /Carrefour/.test(alerts.predictionToast) && alerts.predictionPulse === 'rtc-pulse' && alerts.predictionBeeps >= 1
+    && alerts.cityZoomBeeps === 0 && alerts.cityZoomFlash === 0 && /Alert Local Bakery/.test(alerts.localPostToast) && alerts.localPostPulse === 'rtc-pulse';
   // No location permission: world view, hint, worldwide feed
   const nowhere = await open(null);
   await sleep(1500);
@@ -94,7 +133,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const worldOk = world.mapCentredOnUser && world.genericPredictionPins > 0 && /^ReducedToClear\//.test(world.overpassUserAgent || '') && /OpenStreetMap/.test(world.attribution)
     && /Generic estimate/.test(world.popup) && /France · EUR · Europe\/Paris/.test(world.detected) && /€/.test(world.pricePlaceholder) && world.nearbyOsmStores >= 2
     && world.postShowsCurrency && world.noLocationHint && /worldwide/.test(world.worldwideFeed) && world.worldwideShowsParis;
-  console.log(JSON.stringify({ liveUpdateReceived: true, newBadgeShown: hasNew, photoUiHiddenWhenDisabled: photoUiHidden, predictionPins: predPins, world, pageErrors: errors }, null, 1));
+  console.log(JSON.stringify({ liveUpdateReceived: true, newBadgeShown: hasNew, photoUiHiddenWhenDisabled: photoUiHidden, predictionPins: predPins, world, alerts, pageErrors: errors }, null, 1));
   await browser.close(); if (srv) srv.stop(); mock.close();
-  if (!hasNew || !photoUiHidden || !worldOk || errors.length) process.exit(1);
+  if (!hasNew || !photoUiHidden || !worldOk || !alertsOk || errors.length) process.exit(1);
 })().catch(e => { console.error('UI smoke FAILED:', e.message); process.exit(1); }).finally(() => setTimeout(() => process.exit(), 500).unref());

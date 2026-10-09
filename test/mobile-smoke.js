@@ -72,6 +72,20 @@ const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000
     results.sheetToggles = await page.$eval('#sheet', s => !s.classList.contains('open'));
     results.summary = await page.$eval('#sheet-summary', s => s.textContent);
     await page.screenshot({ path: 'test/screenshot-mobile.png' }); // final: map with the new pin + peeking sheet
+    // Live local alert: another user posts at a store on this phone's map view -> checkout beep + pin highlight.
+    // Reduced motion is requested, so the pin must be highlighted without the pulse animation.
+    await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
+    await page.tap('#btn-sound'); // sound on (plays a preview beep)
+    results.soundOn = await page.evaluate(() => localStorage.getItem('rtc_sound') === '1');
+    const beeps0 = await page.evaluate(() => Number(document.body.dataset.beeps || 0));
+    const other = await require('./helpers/poster')(browser, srv.base, config.sitePassword, 'Phone Neighbour');
+    results.alertPostStatus = await other.post(51.5249, -0.0872, 'Alert Test Express');
+    await page.waitForSelector('.pin.alerted', { timeout: 8000 });
+    await page.waitForFunction(b => Number(document.body.dataset.beeps || 0) > b, { timeout: 12000 }, beeps0);
+    results.alert = await page.evaluate(() => { const t = document.querySelector('#alert-toast'), r = t.getBoundingClientRect(), pin = document.querySelector('.pin.alerted');
+      return { toast: t.textContent, toastOnScreen: !t.hidden && r.top >= 0 && r.bottom <= innerHeight && r.right <= innerWidth, reducedMotionNoPulse: getComputedStyle(pin).animationName === 'none' }; });
+    await page.screenshot({ path: 'test/screenshot-mobile-alert.png' });
+    await other.close();
   } finally {
     await browser.close(); srv.stop();
   }
@@ -79,7 +93,8 @@ const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000
   console.log(JSON.stringify(results, null, 1));
   const bad = !results.gateShown || !results.manifest.ok || !results.iconsOk || !results.noHorizontalScroll || !results.mapFullWidth || !results.sheetCollapsed
     || !results.fabVisible || results.smallTouchTargets.length || !results.formFullScreen || results.cameraInput.capture !== 'environment'
-    || !results.formInputsNoZoom || !results.sheetOpensAfterPost || !results.sheetToggles || results.postHasPhoto !== true || errors.length;
+    || !results.formInputsNoZoom || !results.sheetOpensAfterPost || !results.sheetToggles || results.postHasPhoto !== true || errors.length
+    || !results.soundOn || results.alertPostStatus !== 201 && results.alertPostStatus !== 200 || !/Alert Test Express/.test(results.alert.toast) || !results.alert.toastOnScreen || !results.alert.reducedMotionNoPulse;
   if (bad) { console.error('MOBILE SMOKE FAILED'); process.exit(1); }
   console.log('MOBILE SMOKE PASSED');
 })().catch(e => { console.error('MOBILE SMOKE FAILED:', e.message); process.exit(1); });

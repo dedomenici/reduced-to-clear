@@ -97,3 +97,12 @@ table.week td{border-top:1px solid #eee;padding:.3rem;vertical-align:top}
 .pred-pin.generic{border-style:dotted;background:rgba(123,44,191,.12);width:14px;height:14px}
 .map-hint{position:absolute;z-index:500;top:10px;left:50%;transform:translateX(-50%);max-width:min(92vw,520px);background:#fffbe6;border:2px solid var(--ink);border-radius:10px;padding:8px 12px;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,.2);text-align:center}
 #area-status{margin:4px 0}
+
+/* Local alerts: a store's pin pulses ~60 s when reductions start (new post, or a predicted window starting), then stays highlighted. */
+.pin.alerted,.pred-pin.alerted{box-shadow:0 0 0 4px #ffd400,0 0 0 6px var(--ink)}
+.pred-pin.alerted{width:22px;height:22px;background:rgba(123,44,191,.55)}
+.alert-flash{animation:rtc-pulse 1s ease-in-out 60}
+@keyframes rtc-pulse{0%,100%{box-shadow:0 0 0 4px #ffd400,0 0 0 6px var(--ink)}50%{box-shadow:0 0 0 12px rgba(255,212,0,.85),0 0 0 16px rgba(29,29,27,.35)}}
+@media (prefers-reduced-motion: reduce){.alert-flash{animation:none}}
+.alert-toast{position:absolute;z-index:600;bottom:16px;left:50%;transform:translateX(-50%);max-width:min(92vw,520px);background:var(--yellow);color:var(--ink);border:2px solid var(--ink);border-radius:10px;padding:8px 12px;font-weight:600;box-shadow:0 2px 8px rgba(0,0,0,.25);text-align:center}
+@media (max-width: 800px){.alert-toast{bottom:auto;top:64px}}

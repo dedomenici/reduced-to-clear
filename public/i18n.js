@@ -7,7 +7,9 @@
     en: {
       appName: 'Reduced to Clear',
       nearMe: 'Near me', useMyLocation: 'Use my location', searchPlaceholder: 'Postcode, town or place…', searchLabel: 'Search for a place', go: 'Go',
-      radius: 'Radius', soundOn: 'Sound on', soundOff: 'Sound off', toggleSound: 'Toggle ping sound', pingTitle: 'Ping on new posts',
+      radius: 'Radius', soundOn: 'Sound on', soundOff: 'Sound off', toggleSound: 'Toggle sound (checkout beep when reductions start nearby)', pingTitle: 'Beep when reductions start at stores on your map',
+      alertPost: 'Reductions just posted at {name}', alertPostMany: 'Reductions just posted at {n} stores on your map',
+      alertPred: 'reductions usually start around now at {name}', alertPredMany: 'reductions usually start around now at {n} stores on your map',
       login: 'Log in', loginOrRegister: ' / Register', logout: 'Log out', register: 'Register', guest: 'Browsing as guest', hi: 'Hi, {name}',
       postReductions: 'Post reductions', postReductionsBtn: '+ Post reductions', showGone: 'show "all gone"', showPredictions: 'show predictions',
       feedLabel: 'Reductions feed', reductionsNearby_one: '{n} reduction nearby', reductionsNearby_other: '{n} reductions nearby',
