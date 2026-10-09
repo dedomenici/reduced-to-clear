@@ -20,34 +20,36 @@
 <header>
   <div class="brand"><span class="sticker">REDUCED TO CLEAR</span></div>
   <div class="loc">
-    <button id="btn-locate" title="Use my location" aria-label="Use my location">📍<span class="lbl"> Near me</span></button>
-    <form id="place-form" role="search"><input id="place" type="search" enterkeyhint="search" placeholder="Postcode or place…" aria-label="Postcode or place"><button aria-label="Search">Go</button></form>
-    <select id="radius" aria-label="Radius"><option value="1">1 km</option><option value="3" selected>3 km</option><option value="10">10 km</option><option value="25">25 km</option></select>
+    <button id="btn-locate" data-i18n-title="useMyLocation" data-i18n-aria-label="useMyLocation" title="Use my location" aria-label="Use my location">📍<span class="lbl"> <span data-i18n="nearMe">Near me</span></span></button>
+    <form id="place-form" role="search"><input id="place" type="search" enterkeyhint="search" data-i18n-placeholder="searchPlaceholder" data-i18n-aria-label="searchLabel" placeholder="Postcode, town or place…" aria-label="Search for a place"><button data-i18n="go" aria-label="Search">Go</button></form>
+    <select id="radius" data-i18n-aria-label="radius" aria-label="Radius"><option value="1">1 km</option><option value="3" selected>3 km</option><option value="10">10 km</option><option value="25">25 km</option></select>
   </div>
   <div class="acct">
-    <button id="btn-sound" title="Ping on new posts" aria-label="Toggle ping sound">🔇<span class="lbl"> Sound off</span></button>
+    <button id="btn-sound" data-i18n-title="pingTitle" data-i18n-aria-label="toggleSound" title="Ping on new posts" aria-label="Toggle ping sound">🔇<span class="lbl"> Sound off</span></button>
     <span id="who"></span>
-    <button id="btn-login">Log in<span class="lbl"> / Register</span></button>
-    <button id="btn-logout" hidden>Log out</button>
+    <button id="btn-login"><span data-i18n="login">Log in</span><span class="lbl" data-i18n="loginOrRegister"> / Register</span></button>
+    <button id="btn-logout" data-i18n="logout" hidden>Log out</button>
   </div>
 </header>
 <main>
-  <div id="map"></div>
-  <button id="fab-post" class="fab" aria-label="Post reductions">＋</button>
-  <aside id="sheet" class="sheet" aria-label="Reductions feed">
+  <div id="map" data-i18n-aria-label="mapLabel" aria-label="Map"></div>
+  <div id="map-hint" class="map-hint" hidden></div>
+  <button id="fab-post" class="fab" data-i18n-aria-label="postFab" aria-label="Post reductions">＋</button>
+  <aside id="sheet" class="sheet" data-i18n-aria-label="feedLabel" aria-label="Reductions feed">
     <button id="sheet-handle" class="sheet-handle" aria-expanded="false" aria-controls="sheet-body">
-      <span class="grip"></span><span id="sheet-summary">Reductions nearby</span><span class="chev">▲</span>
+      <span class="grip"></span><span id="sheet-summary">…</span><span class="chev">▲</span>
     </button>
     <div id="sheet-body" class="sheet-body">
       <div class="aside-head">
-        <button id="btn-new" class="primary">+ Post reductions</button>
-        <label class="chk"><input type="checkbox" id="show-gone"> show "all gone"</label>
-        <label class="chk"><input type="checkbox" id="show-pred" checked> show predictions</label>
+        <button id="btn-new" class="primary" data-i18n="postReductionsBtn">+ Post reductions</button>
+        <label class="chk"><input type="checkbox" id="show-gone"> <span data-i18n="showGone">show "all gone"</span></label>
+        <label class="chk"><input type="checkbox" id="show-pred" checked> <span data-i18n="showPredictions">show predictions</span></label>
       </div>
       <div id="live-status" class="muted small"></div>
+      <div id="area-status" class="muted small" hidden></div>
       <ol id="feed"></ol>
-      <p class="muted small">Posts are community reports; check in store. <span class="pred-label">PREDICTION</span> pins (dashed purple) are estimates, not confirmed reductions.
-      Map © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>.</p>
+      <p class="muted small" id="footer-note"></p>
+      <p class="muted small" id="attribution"></p>
     </div>
   </aside>
 </main>
@@ -55,52 +57,55 @@
 <dialog id="dlg-auth">
   <form id="auth-form" method="dialog">
     <h2 id="auth-title">Log in</h2>
-    <p class="muted small">You need an account to post, edit your posts, or mark items all gone. This keeps the map honest.</p>
-    <label class="reg-only">Display name <input name="displayName" maxlength="40" autocomplete="nickname"></label>
-    <label>Email <input name="email" type="email" required autocomplete="email" inputmode="email" autocapitalize="off"></label>
-    <label>Password <input name="password" type="password" required minlength="8" autocomplete="current-password"></label>
+    <p class="muted small" data-i18n="authNeeded"></p>
+    <label class="reg-only"><span data-i18n="displayName">Display name</span> <input name="displayName" maxlength="40" autocomplete="nickname"></label>
+    <label><span data-i18n="email">Email</span> <input name="email" type="email" required autocomplete="email" inputmode="email" autocapitalize="off"></label>
+    <label><span data-i18n="password">Password</span> <input name="password" type="password" required minlength="8" autocomplete="current-password"></label>
     <input name="website" class="hp" tabindex="-1" autocomplete="off" aria-hidden="true">
     <p class="err" id="auth-err"></p>
-    <div class="row"><button type="submit" class="primary" id="auth-submit">Log in</button><button type="button" id="auth-cancel">Cancel</button></div>
+    <div class="row"><button type="submit" class="primary" id="auth-submit">Log in</button><button type="button" id="auth-cancel" data-i18n="cancel">Cancel</button></div>
     <p class="small"><a href="#" id="auth-toggle">No account? Register</a></p>
   </form>
 </dialog>
 
 <dialog id="dlg-post">
   <form id="post-form">
-    <div class="dlg-top"><h2>Post reductions</h2><button type="button" class="x" id="post-x" aria-label="Close">✕</button></div>
-    <label>Nearby store (optional) <select name="store_id" id="store-select"><option value="">— new / not listed —</option></select></label>
+    <div class="dlg-top"><h2 data-i18n="postReductions">Post reductions</h2><button type="button" class="x" id="post-x" data-i18n-aria-label="close" aria-label="Close">✕</button></div>
+    <label><span data-i18n="nearbyStore">Nearby store (optional)</span> <select name="store_id" id="store-select"><option value="" data-i18n="newStore">— new / not listed —</option></select></label>
     <div id="new-store-fields">
-      <label>Supermarket <select name="chain" id="chain-select"></select></label>
-      <label id="chain-other-wrap" hidden>Supermarket name <input name="chain_other" maxlength="60"></label>
-      <label>Branch name <input name="store_name" placeholder="e.g. Tesco Express Old Street" maxlength="80" autocapitalize="words"></label>
-      <label>Address (optional) <input name="address" maxlength="160" autocomplete="street-address"></label>
+      <label><span data-i18n="supermarket">Supermarket</span> <select name="chain" id="chain-select"></select></label>
+      <label id="chain-other-wrap" hidden><span data-i18n="supermarketName">Supermarket name</span> <input name="chain_other" maxlength="60" autocapitalize="words"></label>
+      <label><span data-i18n="branchName">Branch name</span> <input name="store_name" data-i18n-placeholder="branchPlaceholder" maxlength="80" autocapitalize="words"></label>
+      <label><span data-i18n="address">Address (optional)</span> <input name="address" maxlength="160" autocomplete="street-address"></label>
+      <label><span data-i18n="city">Town / city (optional)</span> <input name="city" maxlength="60" autocomplete="address-level2" autocapitalize="words"></label>
     </div>
-    <label>What's reduced? <textarea name="items" required maxlength="1000" rows="3" enterkeyhint="next" placeholder="e.g. sushi packs 75% off, sourdough loaves 20p, lots of salads"></textarea></label>
-    <label>Prices / notes (optional) <input name="price_note" maxlength="200" placeholder="e.g. most items £0.50–£1"></label>
-    <label>Time seen <input type="datetime-local" name="seen_local" required></label>
-    <fieldset><legend>Location</legend>
-      <div class="row"><button type="button" id="loc-here">📍 Use my location</button><button type="button" id="loc-pick">🗺 Pick on map</button></div>
-      <p class="small" id="loc-text">Not set</p>
+    <label><span data-i18n="whatsReduced">What's reduced?</span> <textarea name="items" required maxlength="1000" rows="3" enterkeyhint="next" data-i18n-placeholder="itemsPlaceholder"></textarea></label>
+    <label><span data-i18n="priceNotes">Prices / notes (optional)</span> <input name="price_note" id="price-note" maxlength="200"></label>
+    <label><span data-i18n="timeSeen">Time seen</span> <input type="datetime-local" name="seen_local" required></label>
+    <fieldset><legend data-i18n="location">Location</legend>
+      <div class="row"><button type="button" id="loc-here" data-i18n="useMyLocationBtn">📍 Use my location</button><button type="button" id="loc-pick" data-i18n="pickOnMap">🗺 Pick on map</button></div>
+      <p class="small" id="loc-text" data-i18n="notSet">Not set</p>
+      <p class="small" id="loc-detected"></p>
+      <p class="small muted" data-i18n="detectedNote"></p>
       <input type="hidden" name="lat"><input type="hidden" name="lng">
-      <div class="row small"><label>Country <select name="country" id="country-select"></select></label><label>City <select name="city" id="city-select"></select></label></div>
     </fieldset>
-    <fieldset id="photo-fieldset" hidden><legend>Photo (optional)</legend>
+    <fieldset id="photo-fieldset" hidden><legend data-i18n="photoOptional">Photo (optional)</legend>
       <div class="row">
-        <label class="filebtn">📷 Take photo<input type="file" id="photo-camera" accept="image/*" capture="environment"></label>
-        <label class="filebtn">🖼 Choose photo<input type="file" id="photo-gallery" accept="image/*"></label>
+        <label class="filebtn"><span data-i18n="takePhoto">📷 Take photo</span><input type="file" id="photo-camera" accept="image/*" capture="environment"></label>
+        <label class="filebtn"><span data-i18n="choosePhoto">🖼 Choose photo</span><input type="file" id="photo-gallery" accept="image/*"></label>
       </div>
-      <div id="photo-preview" class="small muted">No photo</div>
+      <div id="photo-preview" class="small muted" data-i18n="noPhoto">No photo</div>
     </fieldset>
     <p class="err" id="post-err"></p>
-    <div class="row sticky-actions"><button type="submit" class="primary">Post</button><button type="button" id="post-cancel">Cancel</button></div>
+    <div class="row sticky-actions"><button type="submit" class="primary" data-i18n="post">Post</button><button type="button" id="post-cancel" data-i18n="cancel">Cancel</button></div>
   </form>
 </dialog>
 
-<dialog id="dlg-pred"><div id="pred-body"></div><button id="pred-close">Close</button></dialog>
-<div id="pick-banner" class="pick-banner" hidden>Tap the map to set the store location <button id="pick-cancel">Cancel</button></div>
+<dialog id="dlg-pred"><div id="pred-body"></div><button id="pred-close" data-i18n="close">Close</button></dialog>
+<div id="pick-banner" class="pick-banner" hidden><span data-i18n="pickBanner">Tap the map to set the store location</span> <button id="pick-cancel" data-i18n="cancel">Cancel</button></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script src="/i18n.js"></script>
 <script src="/app.js"></script>
 </body>
 </html>

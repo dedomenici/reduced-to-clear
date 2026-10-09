@@ -5,6 +5,7 @@
 //      batch([[sql, params], ...]) (atomic where supported), flush(), close(), kind
 const fs = require('fs');
 const path = require('path');
+const { CELL_SQL } = require('./geo');
 
 // Ordered migrations. Never edit an applied migration; append a new one.
 const MIGRATIONS = [
@@ -40,6 +41,18 @@ const MIGRATIONS = [
   // 3: photos stored in the database (BLOB), so hosted/free deployments don't need a disk
   `CREATE TABLE IF NOT EXISTS photos (
      id TEXT PRIMARY KEY, mime TEXT NOT NULL, bytes INTEGER NOT NULL, data BLOB NOT NULL, created_at TEXT NOT NULL);`,
+  // 4: worldwide. Grid-cell column (see src/geo.js) so bbox queries use an index instead of scanning a
+  //    latitude band around the whole planet; OSM tile cache for on-demand store fetching.
+  `ALTER TABLE stores ADD COLUMN cell INTEGER;
+   ALTER TABLE posts ADD COLUMN cell INTEGER;
+   UPDATE stores SET cell = ${CELL_SQL};
+   UPDATE posts SET cell = ${CELL_SQL};
+   CREATE INDEX IF NOT EXISTS stores_cell ON stores(cell);
+   CREATE INDEX IF NOT EXISTS posts_cell ON posts(cell, created_at);
+   DROP INDEX IF EXISTS stores_latlng;  -- a lat range scans a band around the whole planet; cells replace it
+   DROP INDEX IF EXISTS posts_latlng;
+   CREATE TABLE IF NOT EXISTS osm_tiles (
+     tile TEXT PRIMARY KEY, status TEXT NOT NULL, fetched_at TEXT, next_try_at TEXT, stores INTEGER NOT NULL DEFAULT 0);`,
 ];
 
 async function migrate(db) {

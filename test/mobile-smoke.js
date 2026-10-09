@@ -12,6 +12,8 @@ const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000
   const results = {}; const errors = [];
   try {
     const page = await browser.newPage();
+    await browser.defaultBrowserContext().overridePermissions(srv.base, ['geolocation']);
+    await page.setGeolocation({ latitude: 51.5246, longitude: -0.0876 }); // user in London
     await page.emulate({ viewport: { width: 390, height: 844, deviceScaleFactor: 1, isMobile: true, hasTouch: true },
       userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1' });
     page.on('pageerror', e => errors.push(e.message));

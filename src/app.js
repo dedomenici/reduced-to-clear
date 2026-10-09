@@ -9,21 +9,12 @@ const config = require('./config');
 const { openDb } = require('./db');
 const predict = require('./predict');
 const photos = require('./photos');
+const geo = require('./geo');
+const { createOsm, ATTRIBUTION, ATTRIBUTION_URL } = require('./osm');
 const seeds = require('../seeds/chain-predictions.json');
 
-const CHAINS = ['Tesco', "Sainsbury's", 'Asda', 'Morrisons', 'Co-op', 'M&S', 'Waitrose', 'Lidl', 'Aldi', 'Iceland', 'Other'];
 const nowIso = () => new Date().toISOString();
-
-function kmBetween(a, b, c, d) {
-  const R = 6371, toR = x => x * Math.PI / 180;
-  const dLat = toR(c - a), dLng = toR(d - b);
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toR(a)) * Math.cos(toR(c)) * Math.sin(dLng / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(h));
-}
-function bbox(lat, lng, km) {
-  const dLat = km / 111, dLng = km / (111 * Math.cos(lat * Math.PI / 180));
-  return [lat - dLat, lat + dLat, lng - dLng, lng + dLng];
-}
+const { kmBetween, bbox, bboxWhere } = geo;
 const clean = (s, max) => String(s ?? '').trim().slice(0, max);
 
 async function seedPredictions(db) {
@@ -44,8 +35,8 @@ async function seedStores(db, file) {
   if ((await db.get('SELECT COUNT(*) AS n FROM stores')).n > 0) return 0;
   const { stores } = JSON.parse(fs.readFileSync(file, 'utf8'));
   const now = nowIso();
-  await db.batch(stores.map(s => [`INSERT OR IGNORE INTO stores (chain,name,address,city,country,timezone,lat,lng,opening_hours,osm_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-    [s.chain, s.name, s.address || null, s.city, s.country, s.timezone, s.lat, s.lng, s.opening_hours || null, s.osm_id || null, now]]));
+  await db.batch(stores.map(s => [`INSERT OR IGNORE INTO stores (chain,name,address,city,country,timezone,lat,lng,opening_hours,osm_id,cell,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [s.chain, s.name, s.address || null, s.city, s.country, s.timezone, s.lat, s.lng, s.opening_hours || null, s.osm_id || null, geo.cellOf(s.lat, s.lng), now]]));
   await db.flush();
   return stores.length;
 }
@@ -61,6 +52,8 @@ async function createApp(opts = {}) {
   const photoStore = photos.createPhotoStore({ db, mode: photoStorage, uploadsDir: config.uploadsDir });
   const chainRows = await seedPredictions(db); // cached: static between deploys
   const seeded = await seedStores(db, opts.seedStoresFile === undefined ? config.seedStoresFile : opts.seedStoresFile);
+  // Stores anywhere in the world are fetched from OSM Overpass on demand and cached (tests pass opts.osm to stub/disable).
+  const osm = createOsm({ db, log: opts.quiet ? () => {} : m => console.log(m), ...(opts.osm || {}) });
   if (!opts.quiet) {
     console.log(`DB: ${db.kind} (schema v${db.schemaVersion}) · photos ${photosEnabled ? 'enabled (' + photoStorage + ')' : 'disabled'} · ${config.hosted ? 'hosted' : 'local'} mode`);
     if (seeded) console.log(`Seeded ${seeded} stores from ${path.basename(config.seedStoresFile)} (© OpenStreetMap contributors, ODbL)`);
@@ -173,7 +166,18 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
     res.clearCookie('rtc_session'); res.json({ ok: true });
   });
   app.get('/api/me', (req, res) => res.json({ user: req.user }));
-  app.get('/api/config', (req, res) => res.json({ countries: config.countries, chains: CHAINS, photosEnabled, maxPhotoBytes: config.limits.maxPhotoBytes }));
+  const chainsFor = cc => config.chainsByCountry[cc] || [];
+  app.get('/api/config', (req, res) => res.json({ chainsByCountry: config.chainsByCountry, photosEnabled, maxPhotoBytes: config.limits.maxPhotoBytes,
+    attribution: { text: ATTRIBUTION, url: ATTRIBUTION_URL },
+    // non-secret diagnostics (behind the gate): lets the owner confirm what the host's env actually turned on
+    server: { schema: db.schemaVersion, db: db.kind, photoStorage, photosEnabledFrom: opts.photosEnabled !== undefined ? 'option' : config.photosEnabledFrom, osmOnDemand: osm.options.enabled } }));
+  // Offline lookup (no external calls): country, time zone and currency for a point, plus the chain list for that country.
+  app.get('/api/geo', (req, res) => {
+    const lat = Number(req.query.lat), lng = Number(req.query.lng);
+    if (!geo.validLatLng(lat, lng)) return res.status(400).json({ error: 'lat,lng required' });
+    const loc = geo.locate(lat, lng);
+    res.json({ ...loc, chains: chainsFor(loc.country) });
+  });
 
   // ---------- Live updates (SSE) ----------
   const clients = new Set();
@@ -205,9 +209,9 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
     const lat = req.query.lat != null ? Number(req.query.lat) : null, lng = req.query.lng != null ? Number(req.query.lng) : null;
     const radius = Math.min(Number(req.query.radius_km) || 3, 50);
     const where = [], params = [];
-    if (lat != null && lng != null && isFinite(lat) && isFinite(lng)) {
-      const [a, b, c, d] = bbox(lat, lng, radius);
-      where.push('p.lat BETWEEN ? AND ? AND p.lng BETWEEN ? AND ?'); params.push(a, b, c, d);
+    if (lat != null && lng != null && geo.validLatLng(lat, lng)) {
+      const w = bboxWhere(bbox(lat, lng, radius), 'p'); // cell index: reads only rows near the point
+      where.push(w.sql); params.push(...w.params);
     }
     if (req.query.include_gone !== '1') where.push('p.all_gone_at IS NULL');
     const hours = Math.min(Number(req.query.hours) || 48, 24 * 30);
@@ -231,18 +235,19 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
       const s = await db.get('SELECT * FROM stores WHERE id = ?', [Number(body.store_id)]);
       if (s) return s;
     }
-    const chain = CHAINS.includes(body.chain) ? body.chain : 'Other';
-    const chainName = chain === 'Other' ? clean(body.chain_other, 60) || 'Other' : chain;
     const lat = Number(body.lat), lng = Number(body.lng);
-    const near = (await db.all('SELECT * FROM stores WHERE chain = ? AND lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?', [chainName, ...bbox(lat, lng, 0.15)]))
+    // Country, time zone and currency always come from the coordinates (offline), so posting works anywhere.
+    const loc = geo.locate(lat, lng);
+    const chain = clean(body.chain, 60);
+    const chainName = !chain || chain === 'Other' ? clean(body.chain_other, 60) || 'Other' : chain;
+    const w = bboxWhere(bbox(lat, lng, 0.15));
+    const near = (await db.all(`SELECT * FROM stores WHERE chain = ? AND ${w.sql}`, [chainName, ...w.params]))
       .filter(s => kmBetween(lat, lng, s.lat, s.lng) <= 0.15);
     if (near.length) return near[0];
-    const country = config.countries[body.country] ? body.country : 'GB';
-    const city = clean(body.city, 60) || 'London';
-    const tz = config.countries[country].cities[city]?.timezone || config.countries[country].timezone;
+    const city = clean(body.city, 60) || null;
     const name = clean(body.store_name, 80) || `${chainName} (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
-    const { id } = await db.run(`INSERT INTO stores (chain,name,address,city,country,timezone,lat,lng,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-      [chainName, name, clean(body.address, 160) || null, city, country, tz, lat, lng, userId, nowIso()]);
+    const { id } = await db.run(`INSERT INTO stores (chain,name,address,city,country,timezone,lat,lng,cell,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [chainName, name, clean(body.address, 160) || null, city, loc.country, loc.timezone, lat, lng, geo.cellOf(lat, lng), userId, nowIso()]);
     return db.get('SELECT * FROM stores WHERE id = ?', [id]);
   }
 
@@ -253,7 +258,7 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
     const lat = Number(b.lat), lng = Number(b.lng);
     if (!items) return fail(400, 'Say what items are reduced');
     if (!b.store_id && !(b.chain)) return fail(400, 'Choose the supermarket');
-    if (!b.store_id && !(isFinite(lat) && isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180)) return fail(400, 'Set the location');
+    if (!b.store_id && !geo.validLatLng(lat, lng)) return fail(400, 'Set the location');
     const seenAt = b.seen_at ? new Date(b.seen_at) : new Date();
     if (isNaN(seenAt)) return fail(400, 'Invalid time');
     if (seenAt > new Date(Date.now() + 5 * 60e3)) return fail(400, 'Time cannot be in the future');
@@ -265,10 +270,10 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
     if (await rateLimited(req.user.id, 'post', config.limits.postsPerHour)) return fail(429, 'Posting limit reached, try again later');
     const photoKey = photo ? await photoStore.save(photo) : null;
     const store = await findOrCreateStore(b, req.user.id);
-    const currency = config.countries[store.country]?.currency || 'GBP';
-    const { id } = await db.run(`INSERT INTO posts (user_id,store_id,items,price_note,photo,seen_at,created_at,lat,lng,city,country,currency)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [req.user.id, store.id, items, clean(b.price_note, 200) || null, photoKey,
-      seenAt.toISOString(), nowIso(), store.lat, store.lng, store.city, store.country, currency]);
+    const currency = geo.currencyFor(store.country);
+    const { id } = await db.run(`INSERT INTO posts (user_id,store_id,items,price_note,photo,seen_at,created_at,lat,lng,cell,city,country,currency)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`, [req.user.id, store.id, items, clean(b.price_note, 200) || null, photoKey,
+      seenAt.toISOString(), nowIso(), store.lat, store.lng, geo.cellOf(store.lat, store.lng), store.city, store.country, currency]);
     const post = await getPost(id, req);
     broadcast('post', { ...post, mine: false });
     res.status(201).json({ post });
@@ -323,14 +328,18 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
   }
   app.get('/api/stores', async (req, res) => {
     const lat = Number(req.query.lat), lng = Number(req.query.lng);
-    if (!isFinite(lat) || !isFinite(lng)) return res.status(400).json({ error: 'lat,lng required' });
+    if (!geo.validLatLng(lat, lng)) return res.status(400).json({ error: 'lat,lng required' });
     const radius = Math.min(Number(req.query.radius_km) || 3, 20);
     const at = req.query.at || nowIso();
-    const stores = (await db.all('SELECT * FROM stores WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?', bbox(lat, lng, radius)))
+    // Fetch + cache OSM supermarkets for this area if we haven't yet (rate-limited; waits a few seconds at most).
+    const area = await osm.ensure(lat, lng, radius, req.ip).catch(e => { console.error('osm', e.message); return { pending: false }; });
+    const w = bboxWhere(bbox(lat, lng, radius));
+    const stores = (await db.all(`SELECT * FROM stores WHERE ${w.sql}`, w.params))
       .map(s => ({ ...s, distance_km: Math.round(kmBetween(lat, lng, s.lat, s.lng) * 100) / 100 }))
       .filter(s => s.distance_km <= radius).sort((a, b) => a.distance_km - b.distance_km).slice(0, 400);
     const seen = await seenTimesFor(stores.map(s => s.id));
-    res.json({ stores: stores.map(s => ({ ...s, prediction: predict.predictStore(s, predict.nowDow(s.timezone, at), seen.get(s.id), chainRows) })) });
+    res.json({ stores: stores.map(s => ({ ...s, prediction: predict.predictStore(s, predict.nowDow(s.timezone, at), seen.get(s.id), chainRows) })),
+      pending: !!area.pending, limited: !!area.limited, attribution: ATTRIBUTION });
   });
   app.get('/api/stores/:id/predictions', async (req, res) => {
     const s = await db.get('SELECT * FROM stores WHERE id = ?', [Number(req.params.id)]);
@@ -347,6 +356,7 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
   app.locals.db = db;
   app.locals.photosEnabled = photosEnabled;
   app.locals.photoStore = photoStore;
+  app.locals.osm = osm;
 
   // Photo retention: drop photos of posts older than PHOTO_RETENTION_DAYS (keeps free DB storage small; posts stay).
   async function prunePhotos() {

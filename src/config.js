@@ -45,13 +45,17 @@ module.exports = {
   // Disk storage needs persistent storage, so it stays OFF unless PHOTOS_ENABLED=true.
   photoStorage: PHOTO_STORAGE,
   photosEnabled: PHOTO_STORAGE === 'db' ? env.PHOTOS_ENABLED !== 'false' : env.PHOTOS_ENABLED === 'true',
+  photosEnabledFrom: env.PHOTOS_ENABLED !== undefined ? 'env' : 'default', // diagnostics: was PHOTOS_ENABLED set by the host?
   photoRetentionDays: Number(env.PHOTO_RETENTION_DAYS || 30),
   uploadsDir: path.resolve(ROOT, env.UPLOADS_DIR || (env.DATA_DIR ? path.join(DATA_DIR, 'uploads') : 'uploads')),
   seedStoresFile: path.join(ROOT, 'seeds', 'stores-london.json'),
-  // International expansion: add countries/cities here.
-  countries: {
-    GB: { name: 'United Kingdom', currency: 'GBP', currencySymbol: '£', timezone: 'Europe/London',
-          cities: { London: { lat: 51.5072, lng: -0.1276, timezone: 'Europe/London' } } },
+  // Worldwide: country, time zone and currency come from coordinates (src/geo.js). These are just the chains offered
+  // in the post form's supermarket list per country; any other store name can be typed in, and OSM stores are picked
+  // from the "nearby store" list.
+  chainsByCountry: {
+    GB: ['Tesco', "Sainsbury's", 'Asda', 'Morrisons', 'Co-op', 'M&S', 'Waitrose', 'Lidl', 'Aldi', 'Iceland'],
+    IE: ['Tesco', 'Dunnes Stores', 'SuperValu', 'Lidl', 'Aldi', 'M&S'],
+    AU: ['Woolworths', 'Coles', 'Aldi'],
   },
   // Photos are shrunk in the browser to fit maxPhotoBytes; the server enforces the cap (300KB keeps Turso storage small).
   limits: { postsPerHour: 10, goneMarksPerHour: 30, maxPhotoBytes: Number(env.MAX_PHOTO_KB || 300) * 1024 },

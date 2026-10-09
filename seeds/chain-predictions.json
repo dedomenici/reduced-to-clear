@@ -1,34 +1,331 @@
 {
-  "_note": "PREDICTIONS ONLY. Chain-typical reduction windows taken from press/shopper reports cited in RESEARCH.md. Every chain says timings vary by store. days: 'mon-sat' | 'sun' | 'all'. Hours are local 24h decimals; null = no fixed clock time (see label).",
+  "_note": "PREDICTIONS ONLY. Chain-typical reduction windows taken from press/shopper reports cited in RESEARCH.md. Every chain says timings vary by store. days: 'mon-sat' | 'sun' | 'all'. Hours are local 24h decimals; null = no fixed clock time (see label). Non-GB rows are only added when a published source gives times (see RESEARCH.md 'Outside the UK'). end=null with a start means 'from <start> onwards'.",
   "sources": {
-    "which": {"title": "Which? – retailer statements on yellow-sticker timing", "url": "https://www.which.co.uk/news/article/best-times-of-day-to-get-yellow-sticker-supermarket-bargains-revealed-aRzv22f0s7Lt"},
-    "mirror2026": {"title": "Mirror, 27 Jan 2026 (Quote My Wall analysis)", "url": "https://www.mirror.co.uk/lifestyle/food-drink/best-time-yellow-sticker-discounts-36624226"},
-    "mirrorTesco": {"title": "Mirror – Tesco bakery reductions moved to ~7pm", "url": "https://www.mirror.co.uk/money/tesco-shoppers-fume-over-big-35304430"},
-    "reddit": {"title": "r/UKFrugal – supermarket sticker timings (staff/shopper reports)", "url": "https://www.reddit.com/r/UKFrugal/comments/1rpta0v/supermarket_food_sticker_timings/"},
-    "reducedgrubIceland": {"title": "Reduced Grub – Iceland reduction times (blog)", "url": "https://reducedgrub.com/what-time-does-iceland-reduce-food/"},
-    "reducedgrubSunday": {"title": "Reduced Grub – Sunday reduction times (blog)", "url": "https://reducedgrub.com/sunday-supermarket-reduction-times/"},
-    "smguide": {"title": "SupermarketGuide (blog, low confidence)", "url": "https://supermarketguide.co.uk/how-yellow-stickers-work-at-uk-supermarkets/"},
-    "scottishsun": {"title": "Scottish Sun – shopper/staff anecdotes", "url": "https://www.thescottishsun.co.uk/money/11003811/exact-time-get-yellow-sticker-bargains/"}
+    "which": {
+      "title": "Which? – retailer statements on yellow-sticker timing",
+      "url": "https://www.which.co.uk/news/article/best-times-of-day-to-get-yellow-sticker-supermarket-bargains-revealed-aRzv22f0s7Lt"
+    },
+    "mirror2026": {
+      "title": "Mirror, 27 Jan 2026 (Quote My Wall analysis)",
+      "url": "https://www.mirror.co.uk/lifestyle/food-drink/best-time-yellow-sticker-discounts-36624226"
+    },
+    "mirrorTesco": {
+      "title": "Mirror – Tesco bakery reductions moved to ~7pm",
+      "url": "https://www.mirror.co.uk/money/tesco-shoppers-fume-over-big-35304430"
+    },
+    "reddit": {
+      "title": "r/UKFrugal – supermarket sticker timings (staff/shopper reports)",
+      "url": "https://www.reddit.com/r/UKFrugal/comments/1rpta0v/supermarket_food_sticker_timings/"
+    },
+    "reducedgrubIceland": {
+      "title": "Reduced Grub – Iceland reduction times (blog)",
+      "url": "https://reducedgrub.com/what-time-does-iceland-reduce-food/"
+    },
+    "reducedgrubSunday": {
+      "title": "Reduced Grub – Sunday reduction times (blog)",
+      "url": "https://reducedgrub.com/sunday-supermarket-reduction-times/"
+    },
+    "smguide": {
+      "title": "SupermarketGuide (blog, low confidence)",
+      "url": "https://supermarketguide.co.uk/how-yellow-stickers-work-at-uk-supermarkets/"
+    },
+    "scottishsun": {
+      "title": "Scottish Sun – shopper/staff anecdotes",
+      "url": "https://www.thescottishsun.co.uk/money/11003811/exact-time-get-yellow-sticker-bargains/"
+    },
+    "irishmirror": {
+      "title": "Irish Mirror, 17 May 2022 – best times for yellow stickers in Irish supermarkets",
+      "url": "https://www.irishmirror.ie/whats-on/food-drink-news/tesco-lidl-ms-supervalu-aldi-26983224"
+    },
+    "7newsWoolworths": {
+      "title": "7NEWS, 29 Nov 2022 – Woolworths staff on markdown times (Reddit staff reports; Woolworths: varies by store)",
+      "url": "https://7news.com.au/lifestyle/food/woolworths-worker-reveals-the-exact-time-supermarket-staff-reduce-fresh-meat-and-dairy-c-9002995"
+    },
+    "yahooColes": {
+      "title": "Yahoo Finance AU – Coles: no set markdown time; shopper reports final hour of trading",
+      "url": "https://au.finance.yahoo.com/news/coles-shopper-saves-1000-a-year-after-discovering-supermarket-secret-that-works-every-time-012754391.html"
+    }
   },
   "windows": [
-    {"chain": "Tesco", "country": "GB", "days": "mon-sat", "start": 19, "end": 22, "label": "Evening from ~7pm; best 30–60 min before close", "confidence": "medium", "src": "mirror2026"},
-    {"chain": "Tesco", "country": "GB", "days": "all", "start": 21.5, "end": 23, "label": "Selected Express stores: 'CS' items may be free after 9:30pm (trial)", "confidence": "low", "src": "mirrorTesco"},
-    {"chain": "Sainsbury's", "country": "GB", "days": "mon-sat", "start": 13, "end": 15, "label": "Best selection 1–3pm", "confidence": "low", "src": "mirror2026"},
-    {"chain": "Sainsbury's", "country": "GB", "days": "mon-sat", "start": 18.5, "end": 20, "label": "Lowest prices 6:30–8pm", "confidence": "medium", "src": "mirror2026"},
-    {"chain": "Asda", "country": "GB", "days": "mon-sat", "start": 9, "end": 11, "label": "Morning wave 9–11am (Asda: 'morning and evening')", "confidence": "medium", "src": "mirror2026"},
-    {"chain": "Asda", "country": "GB", "days": "mon-sat", "start": 19, "end": 21, "label": "Evening wave 7–9pm", "confidence": "medium", "src": "mirror2026"},
-    {"chain": "Asda", "country": "GB", "days": "sun", "start": 12, "end": 13, "label": "Sunday second markdown ~12pm (one staff report)", "confidence": "low", "src": "reddit"},
-    {"chain": "Morrisons", "country": "GB", "days": "mon-sat", "start": 10, "end": 13, "label": "First reductions 10am–1pm (manager-led)", "confidence": "low", "src": "mirror2026"},
-    {"chain": "Morrisons", "country": "GB", "days": "mon-sat", "start": 17, "end": 20, "label": "Second reductions 5–8pm", "confidence": "medium", "src": "mirror2026"},
-    {"chain": "Co-op", "country": "GB", "days": "mon-sat", "start": 17, "end": 19, "label": "~50% off 5–7pm", "confidence": "medium", "src": "mirror2026"},
-    {"chain": "Co-op", "country": "GB", "days": "mon-sat", "start": 19.75, "end": 20.5, "label": "Deeper around 8pm", "confidence": "medium", "src": "mirror2026"},
-    {"chain": "M&S", "country": "GB", "days": "all", "start": null, "end": null, "label": "About 1 hour before closing (some staff say overnight → store opening, re-reduced ~2–4pm)", "confidence": "low", "src": "mirror2026"},
-    {"chain": "M&S", "country": "GB", "days": "sun", "start": 14, "end": 16, "label": "Sunday final reductions usually after 2pm", "confidence": "low", "src": "reducedgrubSunday"},
-    {"chain": "Waitrose", "country": "GB", "days": "mon-sat", "start": 18, "end": 19, "label": "Starts afternoon, deepest towards close (~6–7pm per one blog)", "confidence": "low", "src": "smguide"},
-    {"chain": "Waitrose", "country": "GB", "days": "sun", "start": 14, "end": 15, "label": "Sunday final reductions 2–3pm", "confidence": "low", "src": "reducedgrubSunday"},
-    {"chain": "Lidl", "country": "GB", "days": "all", "start": null, "end": null, "label": "First thing at opening, then 3–4 hours before closing (Lidl to Which?)", "confidence": "medium", "src": "which"},
-    {"chain": "Aldi", "country": "GB", "days": "mon-sat", "start": 19, "end": 22, "label": "Most often 7pm to close; 30% or 75% off last-day perishables", "confidence": "medium", "src": "mirror2026"},
-    {"chain": "Iceland", "country": "GB", "days": "mon-sat", "start": 17, "end": 19, "label": "Final reductions from ~3pm, deepest 5–7pm (blog)", "confidence": "low", "src": "reducedgrubIceland"},
-    {"chain": "Iceland", "country": "GB", "days": "sun", "start": 13, "end": 15, "label": "Sunday best 1–3pm (blog)", "confidence": "low", "src": "reducedgrubSunday"}
+    {
+      "chain": "Tesco",
+      "country": "GB",
+      "days": "mon-sat",
+      "start": 19,
+      "end": 22,
+      "label": "Evening from ~7pm; best 30–60 min before close",
+      "confidence": "medium",
+      "src": "mirror2026"
+    },
+    {
+      "chain": "Tesco",
+      "country": "GB",
+      "days": "all",
+      "start": 21.5,
+      "end": 23,
+      "label": "Selected Express stores: 'CS' items may be free after 9:30pm (trial)",
+      "confidence": "low",
+      "src": "mirrorTesco"
+    },
+    {
+      "chain": "Sainsbury's",
+      "country": "GB",
+      "days": "mon-sat",
+      "start": 13,
+      "end": 15,
+      "label": "Best selection 1–3pm",
+      "confidence": "low",
+      "src": "mirror2026"
+    },
+    {
+      "chain": "Sainsbury's",
+      "country": "GB",
+      "days": "mon-sat",
+      "start": 18.5,
+      "end": 20,
+      "label": "Lowest prices 6:30–8pm",
+      "confidence": "medium",
+      "src": "mirror2026"
+    },
+    {
+      "chain": "Asda",
+      "country": "GB",
+      "days": "mon-sat",
+      "start": 9,
+      "end": 11,
+      "label": "Morning wave 9–11am (Asda: 'morning and evening')",
+      "confidence": "medium",
+      "src": "mirror2026"
+    },
+    {
+      "chain": "Asda",
+      "country": "GB",
+      "days": "mon-sat",
+      "start": 19,
+      "end": 21,
+      "label": "Evening wave 7–9pm",
+      "confidence": "medium",
+      "src": "mirror2026"
+    },
+    {
+      "chain": "Asda",
+      "country": "GB",
+      "days": "sun",
+      "start": 12,
+      "end": 13,
+      "label": "Sunday second markdown ~12pm (one staff report)",
+      "confidence": "low",
+      "src": "reddit"
+    },
+    {
+      "chain": "Morrisons",
+      "country": "GB",
+      "days": "mon-sat",
+      "start": 10,
+      "end": 13,
+      "label": "First reductions 10am–1pm (manager-led)",
+      "confidence": "low",
+      "src": "mirror2026"
+    },
+    {
+      "chain": "Morrisons",
+      "country": "GB",
+      "days": "mon-sat",
+      "start": 17,
+      "end": 20,
+      "label": "Second reductions 5–8pm",
+      "confidence": "medium",
+      "src": "mirror2026"
+    },
+    {
+      "chain": "Co-op",
+      "country": "GB",
+      "days": "mon-sat",
+      "start": 17,
+      "end": 19,
+      "label": "~50% off 5–7pm",
+      "confidence": "medium",
+      "src": "mirror2026"
+    },
+    {
+      "chain": "Co-op",
+      "country": "GB",
+      "days": "mon-sat",
+      "start": 19.75,
+      "end": 20.5,
+      "label": "Deeper around 8pm",
+      "confidence": "medium",
+      "src": "mirror2026"
+    },
+    {
+      "chain": "M&S",
+      "country": "GB",
+      "days": "all",
+      "start": null,
+      "end": null,
+      "label": "About 1 hour before closing (some staff say overnight → store opening, re-reduced ~2–4pm)",
+      "confidence": "low",
+      "src": "mirror2026"
+    },
+    {
+      "chain": "M&S",
+      "country": "GB",
+      "days": "sun",
+      "start": 14,
+      "end": 16,
+      "label": "Sunday final reductions usually after 2pm",
+      "confidence": "low",
+      "src": "reducedgrubSunday"
+    },
+    {
+      "chain": "Waitrose",
+      "country": "GB",
+      "days": "mon-sat",
+      "start": 18,
+      "end": 19,
+      "label": "Starts afternoon, deepest towards close (~6–7pm per one blog)",
+      "confidence": "low",
+      "src": "smguide"
+    },
+    {
+      "chain": "Waitrose",
+      "country": "GB",
+      "days": "sun",
+      "start": 14,
+      "end": 15,
+      "label": "Sunday final reductions 2–3pm",
+      "confidence": "low",
+      "src": "reducedgrubSunday"
+    },
+    {
+      "chain": "Lidl",
+      "country": "GB",
+      "days": "all",
+      "start": null,
+      "end": null,
+      "label": "First thing at opening, then 3–4 hours before closing (Lidl to Which?)",
+      "confidence": "medium",
+      "src": "which"
+    },
+    {
+      "chain": "Aldi",
+      "country": "GB",
+      "days": "mon-sat",
+      "start": 19,
+      "end": 22,
+      "label": "Most often 7pm to close; 30% or 75% off last-day perishables",
+      "confidence": "medium",
+      "src": "mirror2026"
+    },
+    {
+      "chain": "Iceland",
+      "country": "GB",
+      "days": "mon-sat",
+      "start": 17,
+      "end": 19,
+      "label": "Final reductions from ~3pm, deepest 5–7pm (blog)",
+      "confidence": "low",
+      "src": "reducedgrubIceland"
+    },
+    {
+      "chain": "Iceland",
+      "country": "GB",
+      "days": "sun",
+      "start": 13,
+      "end": 15,
+      "label": "Sunday best 1–3pm (blog)",
+      "confidence": "low",
+      "src": "reducedgrubSunday"
+    },
+    {
+      "chain": "Tesco",
+      "country": "IE",
+      "days": "all",
+      "start": 18,
+      "end": null,
+      "label": "From ~6pm onwards (varies by store)",
+      "confidence": "low",
+      "src": "irishmirror"
+    },
+    {
+      "chain": "Aldi",
+      "country": "IE",
+      "days": "all",
+      "start": null,
+      "end": null,
+      "label": "At opening (~9am): 30% off items on their last day; any left by evening go to 75% off",
+      "confidence": "low",
+      "src": "irishmirror"
+    },
+    {
+      "chain": "Lidl",
+      "country": "IE",
+      "days": "all",
+      "start": null,
+      "end": null,
+      "label": "At opening (~8am)",
+      "confidence": "low",
+      "src": "irishmirror"
+    },
+    {
+      "chain": "M&S",
+      "country": "IE",
+      "days": "all",
+      "start": null,
+      "end": null,
+      "label": "About 30 minutes before closing",
+      "confidence": "low",
+      "src": "irishmirror"
+    },
+    {
+      "chain": "SuperValu",
+      "country": "IE",
+      "days": "all",
+      "start": null,
+      "end": null,
+      "label": "More likely at weekends, when big deliveries arrive",
+      "confidence": "low",
+      "src": "irishmirror"
+    },
+    {
+      "chain": "Woolworths",
+      "country": "AU",
+      "days": "all",
+      "start": 9,
+      "end": 10,
+      "label": "Produce ~9–10am (one staff report)",
+      "confidence": "low",
+      "src": "7newsWoolworths"
+    },
+    {
+      "chain": "Woolworths",
+      "country": "AU",
+      "days": "all",
+      "start": 14,
+      "end": 16,
+      "label": "First markdown on chilled & meat 1–2 days from date, 2–4pm (one staff report)",
+      "confidence": "low",
+      "src": "7newsWoolworths"
+    },
+    {
+      "chain": "Woolworths",
+      "country": "AU",
+      "days": "all",
+      "start": 18,
+      "end": null,
+      "label": "From ~6–7pm: further same-day markdowns, up to 80% (staff reports)",
+      "confidence": "low",
+      "src": "7newsWoolworths"
+    },
+    {
+      "chain": "Coles",
+      "country": "AU",
+      "days": "all",
+      "start": null,
+      "end": null,
+      "label": "No set time (Coles: depends on stock, deliveries and rostering); one shopper finds markdowns in the final hour of trading",
+      "confidence": "low",
+      "src": "yahooColes"
+    }
   ]
 }

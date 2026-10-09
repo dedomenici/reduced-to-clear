@@ -52,6 +52,19 @@ These windows are seeded into the prototype as **"Predicted (chain typical)"** w
 
 ---
 
+### Outside the UK (added 9 Oct 2026; only sourced times are used in the app)
+| Country / chain | Retailer statement | Reported times |
+|---|---|---|
+| **IE – Tesco, Aldi, Lidl, M&S, SuperValu** | — | Tesco "6pm and onwards"; Aldi 9am (when stores open); Lidl 8am (when stores open); M&S "30 minutes before stores close"; SuperValu "more likely on weekends when big deliveries arrive". "The exact timings are subject to change, and differ from store to store." Aldi: 30% off in the morning on items dated today, 75% off on any still there in the evening. [Irish Mirror, 17 May 2022 https://www.irishmirror.ie/whats-on/food-drink-news/tesco-lidl-ms-supervalu-aldi-26983224] |
+| **AU – Woolworths** | Availability "will vary from day to day and store to store based on stock levels and demand". | Staff on Reddit: chilled and meat first markdown 2–4pm for items one or two days out; "usually from 6pm onward" further same-day markdowns up to 80%; produce around 9–10am. A second worker: "go in around 7pm". [7NEWS, 29 Nov 2022 https://7news.com.au/lifestyle/food/woolworths-worker-reveals-the-exact-time-supermarket-staff-reduce-fresh-meat-and-dairy-c-9002995] |
+| **AU – Coles** | No set time; depends on "stock on hand, delivery schedules and team member rostering". | One shopper finds markdowns in "the final hour of the day". [Yahoo Finance AU https://au.finance.yahoo.com/news/coles-shopper-saves-1000-a-year-after-discovering-supermarket-secret-that-works-every-time-012754391.html] |
+
+No times were added for other countries or chains: none were found with a published source in this pass. Elsewhere the app uses the **generic low-confidence estimate** (the last 2 hours before the store's OSM closing time). That rests on the UK pattern above: Aldi and M&S say reductions are likely near closing [Which?], Lidl a few hours before closing [Which?], and Tesco 30–60 minutes before close [Mirror 2026]. It's labelled as a generic guess, not chain-specific.
+
+### OpenStreetMap / Overpass fair use (for on-demand store fetching)
+- Overpass public instances: "users are expected to send a maximum of about 10000 requests per day and keep their download volume below about 1 GB per day". Problematic behaviour includes "Stiching bounding boxes to scrape the full data of the complete world" and "Setting up an app for more than just OSM mappers and relying on the public instances as backend". Rate-limited requests get HTTP 429; resource-limited ones get 504. https://dev.overpass-api.de/overpass-doc/en/preface/commons.html
+- What the app does: tiles are fetched only where users look, cached for 30 days, one request at a time, a daily cap of 500, per-IP caps, backoff, and a User-Agent. That's suitable for the private prototype. A public launch should use its own Overpass instance or periodic extracts.
+
 ## 3. Legal / ToS notes for scraping & data
 
 - **Tesco** website T&Cs: a search summary reported a clause prohibiting bots/crawlers/scrapers/AI tools without prior written consent. My direct fetch of https://www.tesco.com/help/terms-and-conditions/ (9 Oct 2026) rendered section 7 "Intellectual property" empty, so **I could not verify the exact wording** — treat as likely prohibited; check manually.

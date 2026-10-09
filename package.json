@@ -1,7 +1,7 @@
 {
   "name": "reduced-to-clear",
   "version": "1.0.0",
-  "description": "Crowdsourced map of reduced-to-clear (yellow sticker) supermarket items",
+  "description": "Crowdsourced worldwide map of reduced-to-clear (yellow sticker) supermarket items",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -10,13 +10,16 @@
     "test:ui": "node test/ui-smoke.js",
     "test:mobile": "node test/mobile-smoke.js",
     "export-stores": "node scripts/export-stores.js",
-    "test:libsql": "node scripts/test-libsql.js"
+    "test:libsql": "node scripts/test-libsql.js",
+    "build-currency": "node scripts/build-currency.js"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "@libsql/client": "^0.18.0",
+    "@photostructure/tz-lookup": "^11.7.0",
+    "@rapideditor/country-coder": "^5.6.1",
     "bcryptjs": "^3.0.3",
     "cookie-parser": "^1.4.7",
     "express": "^5.3.0",
@@ -25,6 +28,7 @@
   },
   "private": true,
   "devDependencies": {
+    "cldr-core": "^48.2.0",
     "puppeteer-core": "^25.13.0"
   },
   "engines": {

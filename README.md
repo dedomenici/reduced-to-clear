@@ -1,20 +1,29 @@
 # Reduced to Clear
 
-A crowdsourced map of supermarkets with reduced-to-clear (yellow-sticker) items. Built for London first, with the data model ready to go global later.
+A crowdsourced map of supermarkets with reduced-to-clear (yellow-sticker) items. Started in London; works anywhere in the world.
 Research behind it (data sources, chain reduction times, legal notes): [RESEARCH.md](RESEARCH.md).
 
 ## Features
 - **Site-wide access gate.** Every page, API and photo sits behind an access password. The password lives in `.env` (`SITE_PASSWORD`) and is checked on the server only. Passing the gate sets a signed, httpOnly cookie that lasts 90 days. Changing the password logs everyone out. Failed attempts are rate-limited.
 - **Browse without an account.** Anyone past the gate sees the map and the feed. The feed shows the newest posts first, with how long ago each was posted, the clock time, and the time the items were seen.
-- **Your location and what's nearby.** Use "📍 Near me" (browser geolocation) or search a postcode or place (Nominatim), then pick a radius of 1, 3, 10 or 25 km. Posts and stores are filtered by distance.
+- **Your location and what's nearby, anywhere.** The map has no fixed city or bounds. On the first visit it asks for your location and centres there; if you decline, it shows the world map with the latest posts worldwide and a hint to tap "📍 Near me" or search (Nominatim). Your last location is remembered. Pick a radius of 1, 3, 10 or 25 km; posts and stores are filtered by distance.
 - **Accounts protect against sabotage.** You must register to post, edit or delete your own posts, or mark a post "all gone". There are also hourly limits (10 posts, 30 all-gone marks), a honeypot field on the sign-up form, and checks that the time seen is within the last 24 hours and not in the future. Each post shows who posted it and who marked it all gone. An "all gone" mark can be undone by the poster or by whoever set it.
-- **Post form.** Supermarket (chain list or "Other"), branch name, address, items, prices/notes, time seen, location (your location or pick on the map), country and city, and an optional photo. **Photos** are stored as BLOBs in the database (`photos` table) when running on Turso, so they work on free hosting with no disk. Locally they default to files in `uploads/`. Before upload, the browser resizes and re-encodes the photo (max 1280px, stepping JPEG quality down) until it fits the **300 KB cap**. The server then checks the real file type (JPEG, PNG or WebP only), **strips EXIF/GPS, XMP, comments and text metadata**, and enforces the cap again. Photos are served only through the gated route `/photos/:key` with `Cache-Control: private, max-age=31536000, immutable` and an ETag (304 on revalidation). Deleting a post deletes its photo, and photos older than `PHOTO_RETENTION_DAYS` (30) are deleted automatically while the post stays. When photos are off (`PHOTOS_ENABLED=false`), the photo controls are hidden and the server accepts posts without photos (any file sent is ignored). The post's currency comes from the country.
+- **Post form.** Nearby store (from OpenStreetMap) or a new one (chain list for the country, or "Other" with any name), branch name, address, optional town/city, items, prices/notes, time seen, location (your location or pick on the map), and an optional photo. Posting works at any location. **Country, time zone and currency are worked out offline from the coordinates** and shown in the form (e.g. "France · EUR · Europe/Paris"); the price placeholder uses that currency. **Photos** are stored as BLOBs in the database (`photos` table) when running on Turso, so they work on free hosting with no disk. Locally they default to files in `uploads/`. Before upload, the browser resizes and re-encodes the photo (max 1280px, stepping JPEG quality down) until it fits the **300 KB cap**. The server then checks the real file type (JPEG, PNG or WebP only), **strips EXIF/GPS, XMP, comments and text metadata**, and enforces the cap again. Photos are served only through the gated route `/photos/:key` with `Cache-Control: private, max-age=31536000, immutable` and an ETag (304 on revalidation). Deleting a post deletes its photo, and photos older than `PHOTO_RETENTION_DAYS` (30) are deleted automatically while the post stays. When photos are off (`PHOTOS_ENABLED=false`), the photo controls are hidden and the server accepts posts without photos (any file sent is ignored).
 - **Live updates.** New posts arrive over Server-Sent Events (`/api/stream`). If the stream drops, the page checks for new posts every 30 seconds instead. New posts play a ping (turn it on with "🔔 Sound on", because browsers block audio until you interact with the page) and get a red **NEW** sticker. Posts made since your last visit are also marked NEW.
 - **Predictions, always labelled PREDICTION.** These show as dashed purple pins with a "PREDICTION" tag in the popup, plus a week view.
-  - *Chain typical:* reduction windows for 10 UK chains, seeded from `seeds/chain-predictions.json`. Each comes from a source cited in RESEARCH.md and carries a confidence level.
+  - *Chain typical:* reduction windows seeded from `seeds/chain-predictions.json`, per country: 10 UK chains, plus Ireland (Tesco, Aldi, Lidl, M&S, SuperValu) and Australia (Woolworths, Coles). Chains in other countries are only added when a published source gives times. Each comes from a source cited in RESEARCH.md and carries a confidence level.
+  - *Generic estimate (low confidence):* for any store worldwide with OSM `opening_hours` and no learned or timed chain window, the last 2 hours before that day's closing time. Shown as fainter dotted pins and labelled "Generic estimate". 24-hour stores, past-midnight closing and unparseable hours get no estimate. The parser handles the common forms (`Mo-Sa 07:00-22:00; Su 10:00-16:00`, `24/7`, `off`, several ranges); rules with months, dates, holidays or sunrise are skipped.
+  - Times are in the store's local time zone; the popup says so when it differs from yours.
   - *Learned:* once a store has 3 or more community reports, the app builds a day-of-week × hour histogram from the "time seen" values, using the store's local timezone. For a given day it scores each hour as: that day's count + 0.25 × the counts on other days of the same kind (weekday or weekend) + 0.05 × the rest. Hours scoring at least 50% of the peak are grouped into windows. Confidence is low under 6 reports, medium from 6 to 14, and high at 15 or more.
-- **Stores.** About 1,800 London supermarkets were imported from OpenStreetMap (© OpenStreetMap contributors, ODbL). Posts at a store of the same chain within 150 m are attached to that store; otherwise a new store is created.
-- **Ready for other countries.** `country`, `city`, `currency` and `timezone` are stored on posts and stores. Add countries and cities in `src/config.js`, and add chain windows to the seeds file with `country` set.
+- **Stores anywhere, from OpenStreetMap on demand** (© OpenStreetMap contributors, ODbL; attributed on the map and in the feed). When someone looks at an area the app hasn't seen, the server fetches `shop=supermarket` (plus branded `shop=convenience`) for the surrounding 0.25° tiles from the Overpass API and caches them in the database (`osm_tiles`, refreshed after 30 days). The client shows "Loading supermarkets…" and asks again while a fetch is running. Fair use, per the Overpass guidelines (https://dev.overpass-api.de/overpass-doc/en/preface/commons.html: about 10,000 requests and 1 GB per day at most):
+  - one request at a time with a 2 s gap; at most 4 new tiles per page load; 30 new tiles per IP per hour; 500 Overpass requests per day in total
+  - 15-minute backoff for a failed tile, and a 60 s pause after a 429 or 504
+  - a `User-Agent: ReducedToClear/1.0 (+<site URL>)` header; a fallback endpoint (kumi.systems)
+  - The same guidelines say that an app for the general public shouldn't rely on the public Overpass servers as its backend. That's fine for this private prototype with caching, but see "Before going public".
+  - ~1,800 London stores are still seeded on first start so London works with no Overpass calls. Posts at a store of the same chain within 150 m are attached to that store; otherwise a new store is created.
+- **Offline geography.** Country from `@rapideditor/country-coder` (boundary data bundled), time zone from `@photostructure/tz-lookup`, currency from a CLDR-derived table (`seeds/country-currency.json`, rebuilt with `node scripts/build-currency.js`). No external lookups. At sea the country is `ZZ` and the currency `XXX`.
+- **Low database reads.** Stores and posts carry a grid `cell` (0.1° × 0.1°) with indexes, and bounding-box queries become a few `cell BETWEEN` ranges plus an exact lat/lng filter (with antimeridian wrap). The old lat/lng index scanned a latitude band around the whole planet, so it was dropped. Tests check the query plan uses the cell indexes. OSM tile status is kept in memory as well as in the database.
+- **i18n-ready.** All client UI text is in `public/i18n.js` (`en`), with `{placeholders}`, plural forms (Intl.PluralRules), the locale picked from the browser, and money/country names formatted with `Intl`. To add a language, add a block. Server error messages and the gate page are still English.
 
 ## Mobile & installable (PWA)
 - **Phones (≤800 px):**
@@ -57,11 +66,16 @@ Environment settings (see `.env.example`):
 | `PHOTO_STORAGE` | `db` if Turso is set, else `disk` | `db` = BLOB table in the database; `disk` = files in `UPLOADS_DIR`. |
 | `MAX_PHOTO_KB` | 300 | Per-photo cap, measured after metadata is stripped. |
 | `PHOTO_RETENTION_DAYS` | 30 | Older photos are deleted (the post stays). |
+| `OSM_ON_DEMAND` | on | `false` turns off on-demand Overpass fetching. |
+| `OVERPASS_URLS` | overpass-api.de, overpass.kumi.systems | Comma-separated endpoints, tried in order. |
+| `OVERPASS_MIN_INTERVAL_MS` / `OVERPASS_DAILY_MAX` / `OSM_NEW_TILES_PER_IP_HOUR` | 2000 / 500 / 30 | Rate limits. |
+| `OSM_CACHE_DAYS` / `OSM_WAIT_MS` | 30 / 8000 | Tile refresh age, and how long `/api/stores` waits for a fetch before answering "pending". |
+| `PUBLIC_URL` | `RENDER_EXTERNAL_URL` | Used in the Overpass User-Agent. |
 | `PORT` | 3000 | Set automatically by hosting platforms. |
 | `DATA_DIR`, `DB_FILE`, `UPLOADS_DIR` | `./data`, `DATA_DIR/rtc.sqlite`, `./uploads` | Local storage paths. |
 
 Store data:
-- `npm run import-osm` refreshes stores from OpenStreetMap (Overpass).
+- Stores for any area load on demand (above). `npm run import-osm -- --bbox s,w,n,e` bulk-imports an area (default: Greater London).
 - `npm run export-stores` rewrites `seeds/stores-london.json` from the database.
 - The seed file is only imported when the stores table is empty.
 
@@ -95,9 +109,9 @@ Use the same steps with the same environment variables (`SITE_PASSWORD`, `SITE_S
 
 ## Test
 ```bash
-npm test                    # API tests on an in-memory local SQLite DB (gate, auth, posting, photos as DB BLOBs: EXIF/GPS + PNG text stripping, type sniffing, 300 KB cap, gated route + cache headers/304, delete + retention prune, photo defaults, photos-disabled mode, hosted-mode secret rules, SSE, permissions, validation, rate limits, migrations, seeding, predictions, DST)
+npm test                    # API tests on an in-memory local SQLite DB (gate, auth, posting, photos as DB BLOBs: EXIF/GPS + PNG text stripping, type sniffing, 300 KB cap, gated route + cache headers/304, delete + retention prune, photo defaults, photos-disabled mode, hosted-mode secret rules, SSE, permissions, validation, rate limits, migrations, seeding, predictions, DST; worldwide: offline country/time zone/currency, grid cells + query plans, on-demand OSM with a stubbed Overpass (caching, User-Agent, per-IP/daily caps, backoff), posting in Paris/Sydney/mid-ocean, AU/IE chain windows, opening_hours parser and generic estimates)
 npm run test:libsql         # the same API tests through @libsql/client (the Turso driver) against a local file: URL
-npm run test:ui             # headless Chrome (desktop, photos disabled): gate → register → post (photo UI hidden) → second browser gets live NEW post → all gone
+npm run test:ui             # headless Chrome (desktop, photos disabled): gate → register → post (photo UI hidden) → second browser gets live NEW post → all gone; then a user in Paris (mock Overpass server): map centres on them, OSM stores + generic prediction pins, form shows "France · EUR · Europe/Paris", post shows EUR; and a user who declines location gets the world view + worldwide feed
 npm run test:mobile         # 390x844 touch emulation (photos stored in the DB, served via /photos/:key): layout, touch targets, bottom sheet, full-screen form, camera input, PWA; writes test/screenshot-mobile*.png
 ```
 The browser tests start their own server on a spare port using a **copy** of `data/rtc.sqlite`, so real data is never touched. Uploaded test photos are removed afterwards. They need Chrome (`CHROME_PATH`, default `/usr/bin/google-chrome`).
@@ -107,11 +121,12 @@ The browser tests start their own server on a spare port using a **copy** of `da
 |---|---|---|
 | POST | /gate | form field `password` |
 | POST | /api/register, /api/login, /api/logout · GET /api/me | session cookie |
-| GET | /api/posts?lat&lng&radius_km&hours=48&include_gone=1 | newest first |
+| GET | /api/posts?lat&lng&radius_km&hours=48&include_gone=1 | newest first; without lat/lng: latest worldwide |
 | POST | /api/posts | multipart; login required |
 | PATCH/DELETE | /api/posts/:id | own posts only |
 | POST/DELETE | /api/posts/:id/gone | login required |
-| GET | /api/stores?lat&lng&radius_km&at | stores with today's prediction |
+| GET | /api/stores?lat&lng&radius_km&at | stores with today's prediction; fetches/caches OSM stores for new areas (`pending: true` while running) |
+| GET | /api/geo?lat&lng | offline country, time zone, currency and chain list for a point |
 | GET | /api/stores/:id/predictions | 7-day prediction view |
 | GET | /api/stream | SSE: `post`, `update`, `delete` |
 | GET | /photos/:key | post photo (gated; private immutable cache, ETag/304) |
@@ -120,4 +135,6 @@ The browser tests start their own server on a spare port using a **copy** of `da
 - Email verification and/or phone or OAuth sign-in; reporting and moderation; trust scores (for example, LiveCheaper-style multi-report verification).
 - CSRF tokens (cookies are SameSite=Lax and `secure` over HTTPS for now), and photo storage on S3 or R2 with image scanning.
 - A commercial tile provider instead of tile.openstreetmap.org (OSMF tile usage policy), plus Postgres/PostGIS for scale.
+- Your own Overpass instance or a periodic import from a planet/Geofabrik extract instead of the public Overpass servers (their guidelines discourage general-public apps using them as a backend).
+- Translations (strings are ready in `public/i18n.js`), localised server errors, and sourced chain times for more countries.
 - A UK GDPR privacy notice and retention policy for accounts, locations and photos.

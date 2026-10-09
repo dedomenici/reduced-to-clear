@@ -93,3 +93,7 @@ table.week td{border-top:1px solid #eee;padding:.3rem;vertical-align:top}
   .sticky-actions{position:sticky;bottom:calc(-1rem - env(safe-area-inset-bottom));background:#fff;padding:.6rem 0;border-top:1px solid #eee}
   .sticky-actions button{flex:1}
 }
+/* worldwide */
+.pred-pin.generic{border-style:dotted;background:rgba(123,44,191,.12);width:14px;height:14px}
+.map-hint{position:absolute;z-index:500;top:10px;left:50%;transform:translateX(-50%);max-width:min(92vw,520px);background:#fffbe6;border:2px solid var(--ink);border-radius:10px;padding:8px 12px;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,.2);text-align:center}
+#area-status{margin:4px 0}

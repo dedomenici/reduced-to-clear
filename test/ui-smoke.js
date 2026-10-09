@@ -6,11 +6,20 @@ const tempServer = require('./helpers/temp-server');
 let BASE = process.argv[2];
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 (async () => {
-  const srv = BASE ? null : await tempServer({ env: { PHOTOS_ENABLED: 'false' } }); if (srv) BASE = srv.base;
+  // Mock Overpass API (serves the Paris fixture) so on-demand store fetching is exercised end to end without the internet.
+  const http = require('http'); const overpassHits = [];
+  const fixture = require('fs').readFileSync(require('path').join(__dirname, 'fixtures', 'overpass-paris.json'));
+  const mock = http.createServer((rq, rs) => { let b = ''; rq.on('data', d => b += d); rq.on('end', () => {
+    overpassHits.push({ ua: rq.headers['user-agent'], body: decodeURIComponent(b) });
+    const paris = /\(48\.75,2\.25,49,2\.5\)/.test(decodeURIComponent(b));
+    rs.setHeader('Content-Type', 'application/json'); rs.end(paris ? fixture : '{"elements":[]}'); }); });
+  await new Promise(r => mock.listen(0, r));
+  const srv = BASE ? null : await tempServer({ env: { PHOTOS_ENABLED: 'false', OVERPASS_URLS: `http://127.0.0.1:${mock.address().port}/api/interpreter`, OVERPASS_MIN_INTERVAL_MS: '0' } }); if (srv) BASE = srv.base;
   const browser = await puppeteer.launch({ executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox'] });
   const errors = [];
-  async function open() {
+  async function open(where = { latitude: 51.5246, longitude: -0.0876 }) { // default: the user is in London (Old Street)
     const ctx = await browser.createBrowserContext(); const page = await ctx.newPage();
+    if (where) { await ctx.overridePermissions(new URL(BASE).origin, ['geolocation']); await page.setGeolocation(where); }
     await page.setViewport({ width: 1300, height: 850 });
     page.on('pageerror', e => errors.push(e.message));
     await page.goto(BASE, { waitUntil: 'networkidle2' });
@@ -49,7 +58,43 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   poster.on('dialog', d => d.accept());
   await poster.evaluate(() => [...document.querySelectorAll('#feed button')].find(b => b.textContent.includes('All gone')).click());
   await watcher.waitForFunction(() => !document.querySelector('#feed').textContent.includes('UI test: sandwiches') || document.querySelector('.post.gone'), { timeout: 8000 });
-  console.log(JSON.stringify({ liveUpdateReceived: true, newBadgeShown: hasNew, photoUiHiddenWhenDisabled: photoUiHidden, predictionPins: predPins, pageErrors: errors }, null, 1));
-  await browser.close(); if (srv) srv.stop();
-  if (!hasNew || !photoUiHidden || errors.length) process.exit(1);
+  // ---- Worldwide: a user in Paris (no London default) ----
+  const paris = await open({ latitude: 48.8566, longitude: 2.3522 });
+  await paris.waitForFunction(() => document.querySelectorAll('.pred-pin.generic').length > 0, { timeout: 15000 });
+  const world = {};
+  world.mapCentredOnUser = await paris.evaluate(() => { const c = JSON.parse(localStorage.getItem('rtc_center')); return Math.abs(c.lat - 48.8566) < 0.01 && Math.abs(c.lng - 2.3522) < 0.01; });
+  world.genericPredictionPins = await paris.evaluate(() => document.querySelectorAll('.pred-pin.generic').length);
+  world.overpassUserAgent = overpassHits.length ? overpassHits[0].ua : null;
+  world.attribution = await paris.$eval('#attribution', n => n.textContent);
+  await paris.evaluate(() => document.querySelector('.leaflet-marker-icon .pred-pin.generic').parentElement.click());
+  await paris.waitForSelector('.leaflet-popup-content');
+  world.popup = await paris.$eval('.leaflet-popup-content', n => n.textContent);
+  await paris.click('#btn-new'); await paris.waitForSelector('#dlg-auth[open]'); await paris.click('#auth-toggle');
+  await paris.type('input[name=displayName]', 'Pierre'); await paris.type('#auth-form input[name=email]', `fr${Date.now()}@example.com`);
+  await paris.type('#auth-form input[name=password]', 'testpass123'); await paris.click('#auth-submit');
+  await paris.waitForFunction(() => !document.querySelector('#btn-logout').hidden);
+  await paris.click('#btn-new'); await paris.waitForSelector('#dlg-post[open]');
+  await paris.waitForFunction(() => document.querySelector('#loc-detected').textContent.includes('EUR'));
+  world.detected = await paris.$eval('#loc-detected', n => n.textContent);
+  world.pricePlaceholder = await paris.$eval('#price-note', n => n.placeholder);
+  await paris.waitForFunction(() => document.querySelector('#store-select').options.length > 1);
+  world.nearbyOsmStores = await paris.$$eval('#store-select option', o => o.map(x => x.textContent).filter(x => /Carrefour|Lidl|Franprix/.test(x)).length);
+  await paris.select('#chain-select', 'Other'); await paris.type('input[name=chain_other]', 'Monoprix');
+  await paris.type('textarea[name=items]', 'Paris test: croissants -50%'); await paris.type('#price-note', '0,60 €');
+  await paris.click('#post-form button[type=submit]');
+  await paris.waitForFunction(() => document.querySelector('#feed').textContent.includes('Paris test'));
+  world.postShowsCurrency = await paris.$eval('#feed', n => n.textContent.includes('(EUR)'));
+  await paris.screenshot({ path: 'test/screenshot-paris.png' });
+  // No location permission: world view, hint, worldwide feed
+  const nowhere = await open(null);
+  await sleep(1500);
+  world.noLocationHint = await nowhere.$eval('#map-hint', n => !n.hidden && n.textContent.length > 10);
+  world.worldwideFeed = await nowhere.$eval('#sheet-summary', n => n.textContent);
+  world.worldwideShowsParis = await nowhere.$eval('#feed', n => n.textContent.includes('Paris test'));
+  const worldOk = world.mapCentredOnUser && world.genericPredictionPins > 0 && /^ReducedToClear\//.test(world.overpassUserAgent || '') && /OpenStreetMap/.test(world.attribution)
+    && /Generic estimate/.test(world.popup) && /France · EUR · Europe\/Paris/.test(world.detected) && /€/.test(world.pricePlaceholder) && world.nearbyOsmStores >= 2
+    && world.postShowsCurrency && world.noLocationHint && /worldwide/.test(world.worldwideFeed) && world.worldwideShowsParis;
+  console.log(JSON.stringify({ liveUpdateReceived: true, newBadgeShown: hasNew, photoUiHiddenWhenDisabled: photoUiHidden, predictionPins: predPins, world, pageErrors: errors }, null, 1));
+  await browser.close(); if (srv) srv.stop(); mock.close();
+  if (!hasNew || !photoUiHidden || !worldOk || errors.length) process.exit(1);
 })().catch(e => { console.error('UI smoke FAILED:', e.message); process.exit(1); }).finally(() => setTimeout(() => process.exit(), 500).unref());
