@@ -106,7 +106,7 @@ function genericWindows(openingHours, dow) {
 
 // Pure function: prediction for a store on a given day (dow in store-local time) from its report times.
 function predictStore(store, dow, seenTimes, chainRows) {
-  const out = { isPrediction: true, day: DOW[dow], learned: null, chain: chainWindows(chainRows, store.chain, store.country, dow), generic: null };
+  const out = { isPrediction: true, day: DOW[dow], learned: null, chain: chainWindows(chainRows, store.chainKey || store.chain, store.country, dow), generic: null };
   if (seenTimes.length >= MIN_REPORTS) {
     const hist = histogram(seenTimes, store.timezone);
     out.learned = {

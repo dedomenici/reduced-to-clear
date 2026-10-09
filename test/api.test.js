@@ -342,14 +342,18 @@ test('stores anywhere: fetched on demand from OSM Overpass, cached, attributed, 
   const carrefour = r.data.stores.find(s => s.osm_id === 'node/9000000001');
   assert.ok(carrefour, 'fixture store returned');
   assert.strictEqual(carrefour.country, 'FR'); assert.strictEqual(carrefour.timezone, 'Europe/Paris'); assert.strictEqual(carrefour.city, 'Paris');
-  assert.strictEqual(carrefour.chain, 'Carrefour City');
+  assert.strictEqual(carrefour.chain, 'Carrefour'); // sub-brands normalised (name keeps 'Carrefour City Rivoli'); older rows are normalised at prediction time
   assert.ok(r.data.stores.find(s => s.osm_id === 'way/9000000002'), 'way centre used');
   assert.ok(!r.data.stores.find(s => s.osm_id === 'node/9000000004'), 'unnamed element skipped');
-  // generic, low-confidence prediction from OSM opening_hours (no chain data for France)
-  assert.deepStrictEqual(carrefour.prediction.chain, []);
-  assert.deepStrictEqual(carrefour.prediction.generic.windows, [{ start: 19, end: 21 }]);
-  assert.strictEqual(carrefour.prediction.generic.confidence, 'low');
-  assert.match(carrefour.prediction.generic.basis, /Generic estimate/);
+  // 'Carrefour City' gets the sourced Carrefour FR windows, so no generic estimate
+  assert.ok(carrefour.prediction.chain.some(c => c.start === 8.5 && /relabelling/.test(c.label)));
+  assert.strictEqual(carrefour.prediction.generic, null);
+  // generic, low-confidence prediction from OSM opening_hours (no chain data for Lidl in France)
+  const lidl = r.data.stores.find(s => s.osm_id === 'way/9000000002');
+  assert.deepStrictEqual(lidl.prediction.chain, []);
+  assert.deepStrictEqual(lidl.prediction.generic.windows, [{ start: 19, end: 21 }]);
+  assert.strictEqual(lidl.prediction.generic.confidence, 'low');
+  assert.match(lidl.prediction.generic.basis, /Generic estimate/);
   const franprix = r.data.stores.find(s => s.osm_id === 'node/9000000003');
   assert.strictEqual(franprix.prediction.generic, null, '24/7 store: no "before closing" estimate');
   // cached: same area again → no new Overpass call, even after the in-memory cache is dropped (reads osm_tiles)
@@ -440,4 +444,23 @@ test('opening_hours parser and generic window', () => {
   assert.strictEqual(predict.genericWindows('Mo-Fr 08:00-02:00', 2), null, 'past midnight skipped');
   assert.strictEqual(predict.genericWindows('Mo-Sa 08:00-20:00', 0), null, 'closed / unknown that day');
   assert.deepStrictEqual(predict.genericWindows('Mo-Sa 08:00-09:00', 1), [{ start: 8, end: 9 }], 'short day clamps to opening');
+});
+
+test('international chain seeds: every row is sourced; local-script OSM brands map to seeded chains', () => {
+  const seeds = require('../seeds/chain-predictions.json');
+  for (const w of seeds.windows) {
+    assert.ok(seeds.sources[w.src] && /^https?:\/\//.test(seeds.sources[w.src].url), `source for ${w.chain}/${w.country}`);
+    assert.ok(['low', 'medium', 'high'].includes(w.confidence));
+  }
+  const { chainFor } = require('../src/osm');
+  const cases = { '全聯福利中心': 'PX Mart', '家樂福': 'Carrefour', 'Carrefour City': 'Carrefour', '統一超商': '7-Eleven', '全家便利商店': 'FamilyMart',
+    'イオン': 'AEON', 'イオンモール': 'イオンモール', '이마트': 'E-mart', '이마트24': '이마트24', 'Tesco Lotus': "Lotus's", '盒马鲜生': 'Hema', 'Tesco Express': 'Tesco' };
+  for (const [brand, chain] of Object.entries(cases)) assert.strictEqual(chainFor({ brand }), chain, brand);
+  const rows = seeds.windows.map(w => ({ chain: w.chain, country: w.country, days: w.days, start_hour: w.start, end_hour: w.end, label: w.label, confidence: w.confidence }));
+  // A Kaohsiung PX Mart cached under its Chinese OSM name gets the PX Mart windows via chainKey, not the generic fallback.
+  const px = { chain: '全聯福利中心', name: '全聯福利中心 高雄中正店', country: 'TW', opening_hours: 'Mo-Su 08:00-23:00' };
+  const p = predict.predictStore({ ...px, chainKey: chainFor({ brand: px.chain, name: px.name }) }, 3, [], rows);
+  assert.ok(p.chain.some(c => c.start === 16) && p.generic === null);
+  // Same chain name in another country does not borrow Taiwan's rows.
+  assert.strictEqual(predict.predictStore({ chain: 'PX Mart', country: 'JP' }, 3, [], rows).chain.length, 0);
 });

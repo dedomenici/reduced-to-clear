@@ -10,7 +10,8 @@ const { openDb } = require('./db');
 const predict = require('./predict');
 const photos = require('./photos');
 const geo = require('./geo');
-const { createOsm, ATTRIBUTION, ATTRIBUTION_URL } = require('./osm');
+const { createOsm, chainFor, ATTRIBUTION, ATTRIBUTION_URL } = require('./osm');
+const withChainKey = s => ({ ...s, chainKey: chainFor({ brand: s.chain, name: s.name }) }); // e.g. 'Carrefour City' -> 'Carrefour', 'イオン' -> 'AEON'
 const seeds = require('../seeds/chain-predictions.json');
 
 const nowIso = () => new Date().toISOString();
@@ -338,14 +339,14 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
       .map(s => ({ ...s, distance_km: Math.round(kmBetween(lat, lng, s.lat, s.lng) * 100) / 100 }))
       .filter(s => s.distance_km <= radius).sort((a, b) => a.distance_km - b.distance_km).slice(0, 400);
     const seen = await seenTimesFor(stores.map(s => s.id));
-    res.json({ stores: stores.map(s => ({ ...s, prediction: predict.predictStore(s, predict.nowDow(s.timezone, at), seen.get(s.id), chainRows) })),
+    res.json({ stores: stores.map(s => ({ ...s, prediction: predict.predictStore(withChainKey(s), predict.nowDow(s.timezone, at), seen.get(s.id), chainRows) })),
       pending: !!area.pending, limited: !!area.limited, osmUnavailable: !!area.unavailable, attribution: ATTRIBUTION });
   });
   app.get('/api/stores/:id/predictions', async (req, res) => {
     const s = await db.get('SELECT * FROM stores WHERE id = ?', [Number(req.params.id)]);
     if (!s) return res.status(404).json({ error: 'not_found' });
     const seen = (await seenTimesFor([s.id])).get(s.id);
-    const week = [1, 2, 3, 4, 5, 6, 0].map(d => predict.predictStore(s, d, seen, chainRows));
+    const week = [1, 2, 3, 4, 5, 6, 0].map(d => predict.predictStore(withChainKey(s), d, seen, chainRows));
     res.json({ store: s, week, note: 'These are PREDICTIONS, not confirmed reductions.' });
   });
 

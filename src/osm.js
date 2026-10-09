@@ -18,11 +18,31 @@ function tileBox(key) {
 
 // Brand/name -> canonical chain name (matches seeds/chain-predictions.json). Unknown brands keep their OSM brand/name.
 const BRANDS = [
+  // UK / IE / AU
+  [/^lotus'?s|โลตัส|tesco lotus/i, "Lotus's"], // before Tesco: "Tesco Lotus" is the old Thai brand
   [/tesco/i, 'Tesco'], [/sainsbury/i, "Sainsbury's"], [/^asda/i, 'Asda'], [/morrisons/i, 'Morrisons'],
   [/^(the )?co-op\b|co-operative/i, 'Co-op'], [/^m&s|marks (and|&) spencer/i, 'M&S'], [/waitrose/i, 'Waitrose'],
   [/^lidl/i, 'Lidl'], [/^aldi/i, 'Aldi'], [/^iceland\b/i, 'Iceland'], [/^woolworths/i, 'Woolworths'], [/^coles\b/i, 'Coles'],
   [/^supervalu/i, 'SuperValu'], [/^dunnes/i, 'Dunnes Stores'],
+  // Japan (OSM brand tags are usually Japanese)
+  [/^(aeon|イオン)(?!モール)/i, 'AEON'], [/イトーヨーカドー|ito.?yokado/i, 'Ito-Yokado'], [/^ライフ|^life$/i, 'Life'],
+  [/西友|^seiyu/i, 'Seiyu'], [/マルエツ|maruetsu/i, 'Maruetsu'], [/^オーケー|^ok store/i, 'OK Store'],
+  [/まいばすけっと|^my ?basket/i, 'My Basket'], [/^サミット|summit store/i, 'Summit'],
+  // Korea
+  [/^(이마트|e-?mart)(?!\s*24)/i, 'E-mart'], [/롯데마트|lotte ?mart/i, 'Lotte Mart'], [/롯데슈퍼|lotte ?super/i, 'Lotte Super'],
+  // Taiwan / HK / China / Singapore / Thailand
+  [/全聯|px ?mart/i, 'PX Mart'], [/^carrefour|家樂福|家乐福/i, 'Carrefour'], [/^7-?eleven|^7-11|セブン-?イレブン|統一超商|세븐일레븐|เซเว่น/i, '7-Eleven'],
+  [/familymart|全家|ファミリーマート/i, 'FamilyMart'], [/萊爾富|hi-?life/i, 'Hi-Life'], [/^ok ?mart|^ok超商/i, 'OK Mart'],
+  [/美廉社|simple ?mart/i, 'Simple Mart'], [/mia c.?bon/i, "Mia C'bon"], [/^costco|好市多|開市客/i, 'Costco'],
+  [/百佳|park ?n ?shop|^taste$|^fusion$/i, 'ParknShop'], [/一田|^yata/i, 'YATA'], [/don ?don ?donki|ドン・?キホーテ|驚安/i, 'Don Don Donki'],
+  [/^market place|oliver'?s/i, 'Market Place'], [/盒马|hema|freshippo/i, 'Hema'], [/永辉|永輝|yonghui/i, 'Yonghui'],
+  [/大润发|大潤發|rt-?mart/i, 'RT-Mart'], [/fair ?price|ntuc/i, 'FairPrice'], [/cold storage/i, 'Cold Storage'],
+  [/^tops\b|ท็อปส์/i, 'Tops'], [/^big ?c\b|บิ๊กซี/i, 'Big C'], [/max ?valu|แม็กซ์แวลู/i, 'MaxValu'], [/gourmet market|กูร์เมต์/i, 'Gourmet Market'],
+  // Europe / Russia / US
+  [/^kaufland/i, 'Kaufland'], [/^rewe/i, 'Rewe'], [/^mercadona/i, 'Mercadona'], [/^albert heijn|^ah( to go)?$/i, 'Albert Heijn'],
+  [/вкусвилл|vkusvill/i, 'VkusVill'], [/trader joe/i, "Trader Joe's"], [/whole foods/i, 'Whole Foods'], [/^kroger/i, 'Kroger'],
 ];
+// Canonical chain for prediction lookups; also applied to stores cached before an alias existed.
 function chainFor(tags) {
   const label = (tags.brand || tags.name || '').trim();
   const hit = BRANDS.find(([re]) => re.test(label));
