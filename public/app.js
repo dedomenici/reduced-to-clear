@@ -3,6 +3,11 @@
   const $ = s => document.querySelector(s);
   const { t, money, countryName } = window.I18N;
   const A = window.RTC_ALERTS;
+  // Non-Latin store names get their English (OSM name:en / brand:en, or known chain) alongside: '全聯福利中心 (PX Mart)'.
+  const { storeLabel } = window.RTC_NAMES;
+  const postName = p => storeLabel(p.store_name, p.chain, p.store_name_en);
+  const storeName = s => storeLabel(s.name, s.chain, s.name_en);
+  const LONDON = { lat: 51.5074, lng: -0.1278 };
   I18N.apply();
   // No default city: start at the user's saved/current location; otherwise show the world and the latest posts everywhere.
   const st = {
@@ -12,6 +17,9 @@
     sound: localStorage.getItem('rtc_sound') === '1',
     lastVisit: localStorage.getItem('rtc_last_visit') || new Date(0).toISOString(),
     picking: false,
+    // The area whose posts/stores are loaded. First load: the user's own area only (saved/current location, else
+    // London). It only changes when the user pans/zooms the map, searches a place or uses "Near me".
+    area: null,
   };
   localStorage.setItem('rtc_last_visit', new Date().toISOString());
 
@@ -43,7 +51,11 @@
 
   // ---------- Map ----------
   const map = L.map('map', { worldCopyJump: true }); // no maxBounds: the whole world is available
-  if (st.center) map.setView([st.center.lat, st.center.lng], 14); else map.setView([25, 10], 2);
+  window.rtcMap = map; // handle for smoke tests / debugging
+  let programmaticUntil = 0; // moves we make ourselves don't count as "the user panned"
+  function progView(lat, lng, zoom) { programmaticUntil = Date.now() + 1500; map.setView([lat, lng], zoom); }
+  if (st.center) { st.area = { lat: st.center.lat, lng: st.center.lng, radius: st.radius }; progView(st.center.lat, st.center.lng, 14); }
+  else progView(25, 10, 2);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' }).addTo(map);
   const postLayer = L.layerGroup().addTo(map);
   const predLayer = L.layerGroup().addTo(map);
@@ -56,8 +68,27 @@
   }
   function setCenter(lat, lng, zoom) {
     st.center = { lat, lng }; localStorage.setItem('rtc_center', JSON.stringify(st.center));
-    map.setView([lat, lng], zoom || Math.max(map.getZoom(), 14)); drawCenter(); showHint(null); load();
+    st.area = { lat, lng, radius: st.radius };
+    progView(lat, lng, zoom || Math.max(map.getZoom(), 14)); drawCenter(); showHint(null); load();
   }
+  function londonFallback() { // no location available: show London only (never the worldwide feed on first load)
+    if (st.area) return;
+    st.area = { ...LONDON, radius: st.radius }; progView(LONDON.lat, LONDON.lng, 13); showHint(t('londonFallback')); load();
+  }
+  // User pans/zooms: load the area in view (debounced). Zoomed out past ~50 km: latest posts everywhere, no store pins.
+  let moveTimer = null;
+  map.on('moveend', () => {
+    if (Date.now() < programmaticUntil || !st.area) return;
+    clearTimeout(moveTimer); moveTimer = setTimeout(() => {
+      const c = map.getCenter(), halfDiag = map.distance(c, map.getBounds().getNorthEast()) / 1000;
+      const radius = Math.max(st.radius, Math.ceil(halfDiag * 10) / 10);
+      const next = radius > 50 ? { world: true } : { lat: c.lat, lng: L.Util.wrapNum(c.lng, [-180, 180], true), radius };
+      const cur = st.area;
+      if (cur.world && next.world) return;
+      if (!cur.world && !next.world && next.radius <= cur.radius && map.distance([cur.lat, cur.lng], c) / 1000 + next.radius <= cur.radius) return; // already loaded
+      st.area = next; showHint(null); load();
+    }, 600);
+  });
   function showHint(text) { const h = $('#map-hint'); h.hidden = !text; h.textContent = text || ''; }
   map.on('click', e => {
     if (st.picking) { setPostLocation(e.latlng.lat, e.latlng.lng); endPicking(); $('#dlg-post').showModal(); }
@@ -70,9 +101,10 @@
     const feed = $('#feed'); feed.replaceChildren();
     postLayer.clearLayers();
     const active = list.filter(p => !p.all_gone_at).length, fresh = list.filter(p => st.newIds.has(p.id) && !p.all_gone_at).length;
-    const sum = $('#sheet-summary'); sum.replaceChildren(t(st.center ? 'reductionsNearby' : 'reductionsWorldwide', { n: active }));
+    const sum = $('#sheet-summary'); const local = st.area && !st.area.world;
+    sum.replaceChildren(t(local ? 'reductionsNearby' : 'reductionsWorldwide', { n: active }));
     if (fresh) sum.append(el('span', { class: 'new-count' }, t('newCount', { n: fresh })));
-    if (!list.length) feed.append(el('li', { class: 'muted' }, t(st.center ? 'noneNearby' : 'noneWorldwide')));
+    if (!list.length) feed.append(el('li', { class: 'muted' }, t(local ? 'noneNearby' : 'noneWorldwide')));
     for (const p of list) {
       feed.append(renderPost(p));
       const cls = p.all_gone_at ? 'gone' : st.newIds.has(p.id) ? 'new' : '';
@@ -85,7 +117,7 @@
     const isNew = st.newIds.has(p.id);
     const li = el('li', { class: 'post' + (p.all_gone_at ? ' gone' : ''), id: compact ? null : 'post-' + p.id, onclick: () => { if (isNew) { st.newIds.delete(p.id); renderAll(); } } },
       isNew && !p.all_gone_at ? el('span', { class: 'new-badge' }, t('newBadge')) : null,
-      el('h3', {}, `${p.store_name}`, p.all_gone_at ? el('span', { class: 'gone-badge' }, t('allGoneBadge')) : null),
+      el('h3', {}, postName(p), p.all_gone_at ? el('span', { class: 'gone-badge' }, t('allGoneBadge')) : null),
       el('div', { class: 'items' }, p.items),
       p.price_note ? el('div', { class: 'small' }, p.price_note, p.currency && p.currency !== 'XXX' ? el('span', { class: 'muted' }, ` (${p.currency})`) : null) : null,
       p.photo_url && !compact ? el('img', { src: p.photo_url, alt: t('photoAlt'), loading: 'lazy' }) : null,
@@ -108,7 +140,7 @@
   const needLogin = () => { if (!st.user) { openAuth(false); return true; } return false; };
   async function markGone(p) {
     if (needLogin()) return;
-    if (!confirm(t('confirmGone', { store: p.store_name }))) return;
+    if (!confirm(t('confirmGone', { store: postName(p) }))) return;
     try { upsert((await api(`/api/posts/${p.id}/gone`, { method: 'POST' })).post); } catch (e) { alert(e.message); }
   }
   async function undoGone(p) { try { upsert((await api(`/api/posts/${p.id}/gone`, { method: 'DELETE' })).post); } catch (e) { alert(e.message); } }
@@ -143,9 +175,9 @@
       const kind = hasLearned(pr) ? 'learned' : pr.chain.length ? '' : 'generic';
       const al = alertAttrs(s.id);
       const m = L.marker([s.lat, s.lng], { zIndexOffset: al ? 900 : 0, icon: L.divIcon({ className: '', html: `<div class="pred-pin ${kind}${al} title="${t('prediction')}"></div>`, iconSize: al ? [22, 22] : [18, 18] }) });
-      m.bindTooltip(t('predTooltip', { name: s.name }));
+      m.bindTooltip(t('predTooltip', { name: storeName(s) }));
       m.bindPopup(() => {
-        const div = el('div', {}, el('span', { class: 'pred-label' }, t('prediction')), el('h3', {}, s.name), el('div', { class: 'small muted' }, t('predFor', { day: pr.day })));
+        const div = el('div', {}, el('span', { class: 'pred-label' }, t('prediction')), el('h3', {}, storeName(s)), el('div', { class: 'small muted' }, t('predFor', { day: pr.day })));
         if (s.timezone && s.timezone !== myTz) div.append(el('div', { class: 'small muted' }, t('predLocalTime', { tz: s.timezone })));
         for (const x of predText(pr)) div.append(el('div', { class: 'small' }, '• ' + x));
         for (const src of sourcesOf(pr)) div.append(el('div', { class: 'small' }, t('source'), el('a', { href: src.url, target: '_blank', rel: 'noopener' }, src.title)));
@@ -157,7 +189,7 @@
   }
   async function showWeek(id) {
     const { store, week } = await api(`/api/stores/${id}/predictions`);
-    const body = $('#pred-body'); body.replaceChildren(el('span', { class: 'pred-label' }, t('prediction')), el('h2', {}, store.name),
+    const body = $('#pred-body'); body.replaceChildren(el('span', { class: 'pred-label' }, t('prediction')), el('h2', {}, storeName(store)),
       el('p', { class: 'small muted' }, t('weekIntro')));
     if (store.timezone && store.timezone !== myTz) body.append(el('p', { class: 'small muted' }, t('predLocalTime', { tz: store.timezone })));
     const tb = el('table', { class: 'week' });
@@ -168,22 +200,26 @@
   // ---------- Loading ----------
   // With a location: nearby posts + stores (stores for a new area are fetched from OpenStreetMap on demand; the
   // server answers "pending" while that runs and we ask again shortly). Without one: latest posts worldwide.
-  const postsQuery = () => st.center ? `lat=${st.center.lat}&lng=${st.center.lng}&radius_km=${st.radius}&include_gone=1` : 'include_gone=1';
+  const postsQuery = () => st.area && !st.area.world ? `lat=${st.area.lat}&lng=${st.area.lng}&radius_km=${st.area.radius}&include_gone=1` : 'include_gone=1';
   let loadSeq = 0, storeRetry = null;
+  let firstLoadDone = false;
   async function load() {
+    if (!st.area) return; // still waiting for the user's location (or the London fallback)
     const seq = ++loadSeq; clearTimeout(storeRetry);
     const { posts } = await api('/api/posts?' + postsQuery());
     if (seq !== loadSeq) return;
     st.posts = new Map(posts.map(p => [p.id, p]));
     for (const p of posts) if (p.created_at > st.lastVisit && !p.mine) st.newIds.add(p.id);
     renderAll();
-    if (st.center) loadStores(seq, 0); else { st.stores = []; renderStores([]); areaStatus(null); }
+    if (!st.area.world) loadStores(seq, 0); else { st.stores = []; renderStores([]); areaStatus(null); }
+    if (!firstLoadDone) { firstLoadDone = true; loadBeep(); }
   }
   function areaStatus(text) { const a = $('#area-status'); a.hidden = !text; a.textContent = text || ''; }
   async function loadStores(seq, attempt) {
     areaStatus(attempt === 0 ? null : t('storesLoading'));
     const slow = setTimeout(() => seq === loadSeq && areaStatus(t('storesLoading')), 1200);
-    const r = await api(`/api/stores?lat=${st.center.lat}&lng=${st.center.lng}&radius_km=${st.radius}`).catch(() => ({ stores: [] }));
+    const a = st.area; if (!a || a.world) return;
+    const r = await api(`/api/stores?lat=${a.lat}&lng=${a.lng}&radius_km=${Math.min(a.radius, 20)}`).catch(() => ({ stores: [] }));
     clearTimeout(slow);
     if (seq !== loadSeq) return;
     st.stores = r.stores; renderStores(r.stores); checkPredictions();
@@ -192,10 +228,11 @@
     else areaStatus(r.limited ? t('storesLimited') : null);
   }
   const inRadius = p => {
-    if (!st.center) { p.distance_km = null; return true; }
-    const R = 6371, r = x => x * Math.PI / 180, dLat = r(p.lat - st.center.lat), dLng = r(p.lng - st.center.lng);
-    const h = Math.sin(dLat / 2) ** 2 + Math.cos(r(st.center.lat)) * Math.cos(r(p.lat)) * Math.sin(dLng / 2) ** 2;
-    p.distance_km = Math.round(2 * R * Math.asin(Math.sqrt(h)) * 100) / 100; return p.distance_km <= st.radius;
+    const a = st.area; if (!a) return false;
+    if (a.world) { p.distance_km = null; return true; }
+    const R = 6371, r = x => x * Math.PI / 180, dLat = r(p.lat - a.lat), dLng = r(p.lng - a.lng);
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(r(a.lat)) * Math.cos(r(p.lat)) * Math.sin(dLng / 2) ** 2;
+    p.distance_km = Math.round(2 * R * Math.asin(Math.sqrt(h)) * 100) / 100; return p.distance_km <= a.radius;
   };
 
   // ---------- Live: SSE with polling fallback ----------
@@ -211,6 +248,21 @@
     } catch { /* audio unavailable */ }
   }
   // Checkout-style beep, synthesised (no sample): one short ~1.35 kHz square blip with a soft envelope.
+  // One beep when the app has loaded (sound on only). Browsers block audio until a user gesture: play right away if the
+  // audio context is allowed to run (e.g. Chrome counts the gate form submit), otherwise on the first tap/key press.
+  function loadBeep() {
+    const d = document.body.dataset;
+    if (!st.sound) { d.loadBeep = 'off'; return; }
+    let ctx; try { ctx = ping.ctx || (ping.ctx = new (window.AudioContext || window.webkitAudioContext)()); } catch { d.loadBeep = 'unavailable'; return; }
+    const playNow = () => { d.loadBeep = 'played'; beeper.trigger(); };
+    if (ctx.state === 'running') return playNow();
+    d.loadBeep = 'waiting';
+    ctx.resume().then(() => { if (ctx.state === 'running' && d.loadBeep === 'waiting') { off(); playNow(); } }).catch(() => {});
+    const onGesture = () => { off(); if (d.loadBeep !== 'waiting') return; if (!st.sound) { d.loadBeep = 'off'; return; } ctx.resume().catch(() => {}); playNow(); };
+    const evs = ['pointerdown', 'keydown', 'touchend'];
+    const off = () => evs.forEach(e => window.removeEventListener(e, onGesture, true));
+    evs.forEach(e => window.addEventListener(e, onGesture, true));
+  }
   function beep() {
     document.body.dataset.beeps = String(Number(document.body.dataset.beeps || 0) + 1); // observable by smoke tests
     if (!st.sound) return;
@@ -249,9 +301,9 @@
   // (b) predicted windows starting now, for stores on screen (only while the prediction layer is shown).
   let lastDayReload = 0;
   function checkPredictions() {
-    if (!st.center || !st.stores || !st.stores.length || !$('#show-pred').checked) return;
+    if (!st.area || st.area.world || !st.stores || !st.stores.length || !$('#show-pred').checked) return;
     const view = mapView(), fired = [];
-    for (const s of st.stores) { const a = alerter.prediction(s, view); if (a) fired.push(a); }
+    for (const s of st.stores) { const a = alerter.prediction({ ...s, name: storeName(s) }, view); if (a) fired.push(a); }
     if (fired.length) { beeper.trigger(); toast(fired); }
     if (fired.length || st.stores.some(s => alerter.state(s.id))) renderStores(st.stores);
     // Predictions are for the store's current day: refetch after midnight.
@@ -267,7 +319,7 @@
     if (st.user && p.user_id === st.user.id) p.mine = true;
     else {
       st.newIds.add(p.id); document.title = t('newTitle');
-      alert = alerter.post(p, mapView());
+      alert = alerter.post({ ...p, store_name: postName(p) }, mapView());
       if (alert) { beeper.trigger(); toast([alert]); } else ping();
     }
     st.posts.set(p.id, p); renderAll();
@@ -293,10 +345,10 @@
 
   // ---------- Location controls ----------
   function locate(quiet) {
-    if (!navigator.geolocation) { if (!quiet) alert(t('noGeo')); return; }
+    if (!navigator.geolocation) { if (quiet) londonFallback(); else alert(t('noGeo')); return; }
     if (quiet) showHint(t('locating'));
     navigator.geolocation.getCurrentPosition(pos => setCenter(pos.coords.latitude, pos.coords.longitude, 15),
-      err => { if (quiet) showHint(t('locateHint')); else alert(t('locationFailed', { msg: err.message })); }, { enableHighAccuracy: true, timeout: 10000 });
+      err => { if (quiet) londonFallback(); else alert(t('locationFailed', { msg: err.message })); }, { enableHighAccuracy: true, timeout: 10000 });
   }
   $('#btn-locate').onclick = () => locate(false);
   $('#place-form').onsubmit = async e => {
@@ -307,7 +359,7 @@
     } catch { alert(t('searchFailed')); }
   };
   $('#radius').value = String(st.radius);
-  $('#radius').onchange = () => { st.radius = Number($('#radius').value); localStorage.setItem('rtc_radius', st.radius); drawCenter(); load(); };
+  $('#radius').onchange = () => { st.radius = Number($('#radius').value); localStorage.setItem('rtc_radius', st.radius); if (st.area && !st.area.world) st.area = { ...st.area, radius: st.radius }; drawCenter(); load(); };
   $('#show-gone').onchange = renderAll;
   $('#show-pred').onchange = () => renderStores(st.stores || []);
   function soundBtn() { $('#btn-sound').replaceChildren(st.sound ? '🔔' : '🔇', el('span', { class: 'lbl' }, ' ' + t(st.sound ? 'soundOn' : 'soundOff'))); }
@@ -356,7 +408,7 @@
   async function fillNearbyStores(lat, lng) {
     const sel = $('#store-select'); sel.replaceChildren(el('option', { value: '' }, t('newStore')));
     const { stores } = await api(`/api/stores?lat=${lat}&lng=${lng}&radius_km=0.5`).catch(() => ({ stores: [] }));
-    for (const s of stores.slice(0, 30)) sel.append(el('option', { value: s.id }, `${s.name} (${Math.round(s.distance_km * 1000)} m)`));
+    for (const s of stores.slice(0, 30)) sel.append(el('option', { value: s.id }, `${storeName(s)} (${Math.round(s.distance_km * 1000)} m)`));
   }
   $('#store-select').onchange = () => { $('#new-store-fields').hidden = !!$('#store-select').value; };
   $('#chain-select').onchange = () => { $('#chain-other-wrap').hidden = $('#chain-select').value !== 'Other'; };
@@ -449,7 +501,9 @@
     $('#footer-note').replaceChildren(before, predLabel, after || '');
     const [a1, a2] = t('attribution').split('{osm}');
     $('#attribution').replaceChildren(a1, el('a', { href: (cfg.attribution && cfg.attribution.url) || 'https://www.openstreetmap.org/copyright', target: '_blank', rel: 'noopener' }, 'OpenStreetMap'), a2 || '');
-    if (!st.center) { showHint(t('locateHint')); locate(true); } // first visit: ask for the user's location
+    if (!st.center) { // first visit: ask for the user's location; London if refused/unavailable/unanswered (12 s)
+      showHint(t('locateHint')); locate(true); setTimeout(londonFallback, 12000);
+    }
     await load(); startLive();
   })();
 })();

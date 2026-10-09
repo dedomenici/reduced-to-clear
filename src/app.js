@@ -75,7 +75,7 @@ async function createApp(opts = {}) {
 <meta name="theme-color" content="#1d1d1b"><link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/icons/favicon-32.png"><link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <title>Reduced to Clear</title><link rel="stylesheet" href="/gate.css"></head><body class="gate">
-<form method="post" action="/gate" class="gate-card"><div class="sticker big">REDUCED<br>TO CLEAR</div>
+<form method="post" action="/gate" class="gate-card"><div class="sticker big logo" role="img" aria-label="Reduced to Clear"><svg class="trolley" viewBox="0 0 64 56" aria-hidden="true" focusable="false"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h9l8 32h33" stroke-width="5"/><path d="M14 13h46l-7 19H18z" stroke-width="4" fill="#fff"/><path d="M29 13v19M44 13v19M16 22.5h41" stroke-width="2.5"/></g><circle cx="24" cy="48" r="5" fill="currentColor"/><circle cx="48" cy="48" r="5" fill="currentColor"/></svg><span class="logo-text" aria-hidden="true">REDUCED<br>TO CLEAR</span></div>
 <p>This site is private for now. Enter the access password.</p>
 ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
 <input type="password" name="password" placeholder="Access password" autofocus required autocomplete="current-password">
@@ -86,6 +86,7 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
   app.get('/manifest.webmanifest', (req, res) => res.type('application/manifest+json').sendFile(pub('manifest.webmanifest')));
   app.get('/sw.js', (req, res) => res.set('Cache-Control', 'no-cache').type('application/javascript').sendFile(pub('sw.js')));
   app.use('/icons', express.static(pub('icons'), { maxAge: '7d' }));
+  app.use('/fonts', express.static(pub('fonts'), { maxAge: '30d' })); // logo web font (OFL), used on the gate page too
   app.get('/gate', (req, res) => res.type('html').send(gatePage(false)));
   app.post('/gate', (req, res) => {
     const ip = req.ip; const f = gateFails.get(ip) || { n: 0, t: Date.now() };
@@ -195,7 +196,7 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
   }
 
   // ---------- Posts ----------
-  const POST_SELECT = `SELECT p.*, s.chain, s.name AS store_name, s.address AS store_address, s.timezone,
+  const POST_SELECT = `SELECT p.*, s.chain, s.name AS store_name, s.name_en AS store_name_en, s.address AS store_address, s.timezone,
       u.display_name AS author, g.display_name AS gone_by_name
     FROM posts p JOIN stores s ON s.id = p.store_id JOIN users u ON u.id = p.user_id LEFT JOIN users g ON g.id = p.all_gone_by`;
   function shapePost(p, req, lat, lng) {

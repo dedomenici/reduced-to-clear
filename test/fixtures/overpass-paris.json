@@ -2,5 +2,6 @@
  {"type":"node","id":9000000001,"lat":48.8570,"lon":2.3530,"tags":{"shop":"supermarket","brand":"Carrefour City","name":"Carrefour City Rivoli","opening_hours":"Mo-Sa 08:00-21:00; Su 09:00-13:00","addr:street":"Rue de Rivoli","addr:housenumber":"10","addr:city":"Paris"}},
  {"type":"way","id":9000000002,"center":{"lat":48.8590,"lon":2.3500},"tags":{"shop":"supermarket","brand":"Lidl","name":"Lidl","opening_hours":"Mo-Sa 08:30-21:00"}},
  {"type":"node","id":9000000003,"lat":48.8550,"lon":2.3560,"tags":{"shop":"convenience","brand":"Franprix","name":"Franprix","opening_hours":"24/7"}},
+ {"type":"node","id":9000000005,"lat":48.8563,"lon":2.3518,"tags":{"shop":"supermarket","name":"京子食品","name:en":"Kioko","opening_hours":"Mo-Sa 10:00-20:00"}},
  {"type":"node","id":9000000004,"lat":48.8560,"lon":2.3540,"tags":{"shop":"supermarket"}}
 ]}

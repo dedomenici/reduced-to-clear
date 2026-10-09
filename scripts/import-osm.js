@@ -4,7 +4,7 @@
 // Usage: node scripts/import-osm.js [--bbox south,west,north,east]   (default: Greater London)
 const config = require('../src/config');
 const { openDb } = require('../src/db');
-const { overpassQuery, elementToStore, UPSERT } = require('../src/osm');
+const { overpassQuery, elementToStore, UPSERT, upsertParams } = require('../src/osm');
 const args = Object.fromEntries(process.argv.slice(2).reduce((a, v, i, arr) => (v.startsWith('--') ? a.concat([[v.slice(2), arr[i + 1]]]) : a), []));
 const box = (args.bbox || '51.28,-0.51,51.69,0.33').split(',').map(Number);
 (async () => {
@@ -23,7 +23,7 @@ const box = (args.bbox || '51.28,-0.51,51.69,0.33').split(',').map(Number);
   const db = await openDb({ file: config.dbFile, tursoUrl: config.tursoUrl, tursoToken: config.tursoToken });
   const now = new Date().toISOString();
   const stores = elements.map(e => elementToStore(e, now)).filter(Boolean);
-  await db.batch(stores.map(s => [UPSERT, [s.chain, s.name, s.address, s.city, s.country, s.timezone, s.lat, s.lng, s.opening_hours, s.osm_id, s.cell, s.created_at]]));
+  await db.batch(stores.map(s => [UPSERT, upsertParams(s)]));
   await db.flush();
   console.log(`Imported/updated ${stores.length} stores (of ${elements.length} OSM elements). Data © OpenStreetMap contributors (ODbL).`);
 })().catch(e => { console.error(e.message); process.exit(1); });

@@ -104,8 +104,12 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   alerts.predictionToast = await lp.$eval('#alert-toast', n => n.textContent);
   alerts.predictionPulse = await lp.$eval('.pred-pin.alerted', n => getComputedStyle(n).animationName);
   alerts.predictionBeeps = await beepsOf(lp);
+  alerts.loadBeep = await lp.evaluate(() => document.body.dataset.loadBeep);
+  if (alerts.loadBeep === 'waiting') { await lp.click('#feed'); alerts.loadBeepAfterTap = await lp.evaluate(() => document.body.dataset.loadBeep); }
+  alerts.loadBeepSoundOff = await watcher.evaluate(() => document.body.dataset.loadBeep);
   await lp.screenshot({ path: 'test/screenshot-alert-prediction.png' });
   const neighbour = await require('./helpers/poster')(browser, BASE, config.sitePassword, 'Paris Neighbour');
+  await sleep(11000); // let the merged load/prediction beep (10 s throttle) play out before measuring
   for (let i = 0; i < 6; i++) { await lp.click('.leaflet-control-zoom-out'); await sleep(400); } // zoom 9: regional level
   let b0 = await beepsOf(lp);
   await neighbour.post(48.8580, 2.3545, 'Alert Regional Zoom');
@@ -122,17 +126,29 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   alerts.localPostPulse = await lp.$eval('.pin.alerted', n => getComputedStyle(n).animationName);
   await lp.screenshot({ path: 'test/screenshot-alert-post.png' });
   await neighbour.close();
-  const alertsOk = /PREDICTION/.test(alerts.predictionToast) && /Carrefour/.test(alerts.predictionToast) && alerts.predictionPulse === 'rtc-pulse' && alerts.predictionBeeps >= 1
+  const alertsOk = (alerts.loadBeep === 'played' || alerts.loadBeepAfterTap === 'played') && alerts.loadBeepSoundOff === 'off' && /PREDICTION/.test(alerts.predictionToast) && /Carrefour/.test(alerts.predictionToast) && alerts.predictionPulse === 'rtc-pulse' && alerts.predictionBeeps >= 1
     && alerts.regionalZoomBeeps === 0 && alerts.regionalZoomFlash === 0 && /Alert Local Bakery/.test(alerts.localPostToast) && alerts.localPostPulse === 'rtc-pulse';
-  // No location permission: world view, hint, worldwide feed
+  // No location permission: London fallback only; nothing worldwide or elsewhere until the user moves the map
   const nowhere = await open(null);
-  await sleep(1500);
-  world.noLocationHint = await nowhere.$eval('#map-hint', n => !n.hidden && n.textContent.length > 10);
-  world.worldwideFeed = await nowhere.$eval('#sheet-summary', n => n.textContent);
-  world.worldwideShowsParis = await nowhere.$eval('#feed', n => n.textContent.includes('Paris test'));
+  await nowhere.waitForFunction(() => /London/.test(document.querySelector('#map-hint').textContent), { timeout: 15000 });
+  await sleep(1000);
+  world.noLocationHint = await nowhere.$eval('#map-hint', n => !n.hidden && n.textContent);
+  world.firstLoadSummary = await nowhere.$eval('#sheet-summary', n => n.textContent);
+  world.firstLoadShowsParis = await nowhere.$eval('#feed', n => n.textContent.includes('Paris test'));
+  const apiCalls = () => nowhere.evaluate(() => performance.getEntriesByType('resource').map(e => e.name).filter(u => /\/api\/(posts|stores)\?/.test(u)).map(u => u.replace(location.origin, '')));
+  world.firstLoadRequests = await apiCalls();
+  world.firstLoadOnlyLondon = world.firstLoadRequests.length > 0 && world.firstLoadRequests.every(u => /lat=51\.50/.test(u));
+  await nowhere.evaluate(() => window.rtcMap.setView([48.8566, 2.3522], 14)); // user pans to Paris
+  await nowhere.waitForFunction(() => document.querySelector('#feed').textContent.includes('Paris test'), { timeout: 10000 });
+  world.panLoadsParis = true;
+  world.kiokoLabel = await nowhere.waitForFunction(() => [...document.querySelectorAll('.leaflet-tooltip-pane, .leaflet-marker-icon')].length > 0, { timeout: 10000 })
+    .then(() => nowhere.evaluate(async () => { const r = await fetch('/api/stores?lat=48.8566&lng=2.3522&radius_km=2').then(r => r.json());
+      const k = r.stores.find(s => s.name === '京子食品'); return k && window.RTC_NAMES.storeLabel(k.name, k.chain, k.name_en); }));
+  await nowhere.screenshot({ path: 'test/screenshot-desktop.png' });
   const worldOk = world.mapCentredOnUser && world.genericPredictionPins > 0 && /^ReducedToClear\//.test(world.overpassUserAgent || '') && /OpenStreetMap/.test(world.attribution)
     && /Generic estimate/.test(world.popup) && /France · EUR · Europe\/Paris/.test(world.detected) && /€/.test(world.pricePlaceholder) && world.nearbyOsmStores >= 2
-    && world.postShowsCurrency && world.noLocationHint && /worldwide/.test(world.worldwideFeed) && world.worldwideShowsParis;
+    && world.postShowsCurrency && /London/.test(world.noLocationHint) && /nearby/.test(world.firstLoadSummary) && !world.firstLoadShowsParis
+    && world.firstLoadOnlyLondon && world.panLoadsParis && world.kiokoLabel === '京子食品 (Kioko)';
   console.log(JSON.stringify({ liveUpdateReceived: true, newBadgeShown: hasNew, photoUiHiddenWhenDisabled: photoUiHidden, predictionPins: predPins, world, alerts, pageErrors: errors }, null, 1));
   await browser.close(); if (srv) srv.stop(); mock.close();
   if (!hasNew || !photoUiHidden || !worldOk || !alertsOk || errors.length) process.exit(1);

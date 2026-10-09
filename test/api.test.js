@@ -301,7 +301,7 @@ test('offline geo: country, time zone and currency from coordinates; /api/geo', 
   assert.strictEqual(r.data.country, 'AU'); assert.strictEqual(r.data.currency, 'AUD'); assert.ok(r.data.chains.includes('Woolworths'));
   r = await req('geo', 'GET', '/api/geo?lat=999&lng=0'); assert.strictEqual(r.status, 400);
   const cfg = (await req('geo', 'GET', '/api/config')).data;
-  assert.ok(!('countries' in cfg), 'no hard-coded country/city list'); assert.strictEqual(cfg.server.schema, 4); assert.strictEqual(cfg.server.photoStorage, 'db'); assert.match(cfg.attribution.text, /OpenStreetMap/);
+  assert.ok(!('countries' in cfg), 'no hard-coded country/city list'); assert.strictEqual(cfg.server.schema, require('../src/db').MIGRATIONS.length); assert.strictEqual(cfg.server.photoStorage, 'db'); assert.match(cfg.attribution.text, /OpenStreetMap/);
 });
 
 test('grid cells: JS and SQL agree; antimeridian bbox splits; queries use the cell index', async () => {
@@ -363,7 +363,10 @@ test('stores anywhere: fetched on demand from OSM Overpass, cached, attributed, 
   await req('paris', 'GET', `/api/stores?lat=${PARIS.lat + 0.001}&lng=${PARIS.lng}&radius_km=1`);
   assert.strictEqual(overpassCalls.length, n, 'served from cache');
   const tile = await app.locals.db.get("SELECT * FROM osm_tiles WHERE status = 'ok' AND stores > 0");
-  assert.ok(tile && tile.stores === 3);
+  assert.ok(tile && tile.stores === 4);
+  // non-Latin name keeps OSM name:en for the '京子食品 (Kioko)' label
+  const kioko = (await req('paris', 'GET', `/api/stores?lat=${PARIS.lat}&lng=${PARIS.lng}&radius_km=2`)).data.stores.find(s => s.osm_id === 'node/9000000005');
+  assert.strictEqual(kioko.name, '京子食品'); assert.strictEqual(kioko.name_en, 'Kioko');
   // GB chain stores keep their sourced chain windows and get no generic fallback
   r = await req('paris', 'GET', '/api/stores?lat=51.5246&lng=-0.0876&radius_km=1');
   const tesco = r.data.stores.find(s => s.chain === 'Tesco');

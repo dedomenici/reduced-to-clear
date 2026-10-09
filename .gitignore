@@ -10,9 +10,10 @@ data/
 *.sqlite.tmp
 uploads/*
 !uploads/.gitkeep
-# test artefacts (keep the mobile screenshot)
+# test artefacts (keep the mobile + desktop screenshots)
 test/*.png
 !test/screenshot-mobile.png
 # misc
 npm-debug.log*
 .DS_Store
+!test/screenshot-desktop.png

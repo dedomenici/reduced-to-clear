@@ -60,16 +60,19 @@ function elementToStore(el, now) {
   const loc = geo.locate(lat, lng);
   const address = [t['addr:housenumber'], t['addr:street'], t['addr:postcode']].filter(Boolean).join(' ') || null;
   return {
-    chain: chainFor(t), name: (t.name || t.brand).slice(0, 80), address, city: t['addr:city'] || null,
+    chain: chainFor(t), name: (t.name || t.brand).slice(0, 80),
+    // English label shown next to non-Latin names, from OSM only (name:en, else brand:en); never machine-translated.
+    name_en: (t['name:en'] || t['brand:en'] || '').slice(0, 80) || null, address, city: t['addr:city'] || null,
     country: loc.country, timezone: loc.timezone, lat, lng, opening_hours: t.opening_hours || null,
     osm_id: `${el.type}/${el.id}`, cell: geo.cellOf(lat, lng), created_at: now,
   };
 }
-const UPSERT = `INSERT INTO stores (chain,name,address,city,country,timezone,lat,lng,opening_hours,osm_id,cell,created_at)
-  VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-  ON CONFLICT(osm_id) DO UPDATE SET chain=excluded.chain, name=excluded.name, address=COALESCE(excluded.address, stores.address),
+const UPSERT = `INSERT INTO stores (chain,name,name_en,address,city,country,timezone,lat,lng,opening_hours,osm_id,cell,created_at)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+  ON CONFLICT(osm_id) DO UPDATE SET chain=excluded.chain, name=excluded.name, name_en=excluded.name_en, address=COALESCE(excluded.address, stores.address),
     city=COALESCE(excluded.city, stores.city), country=excluded.country, timezone=excluded.timezone,
     lat=excluded.lat, lng=excluded.lng, cell=excluded.cell, opening_hours=excluded.opening_hours`;
+const upsertParams = s => [s.chain, s.name, s.name_en, s.address, s.city, s.country, s.timezone, s.lat, s.lng, s.opening_hours, s.osm_id, s.cell, s.created_at];
 
 function createOsm(opts = {}) {
   const env = process.env;
@@ -149,7 +152,7 @@ function createOsm(opts = {}) {
       const elements = await request(overpassQuery(tileBox(key)));
       const stores = elements.map(el => elementToStore(el, now)).filter(Boolean);
       const seen = new Set(); const unique = stores.filter(s => !seen.has(s.osm_id) && seen.add(s.osm_id));
-      const stmts = unique.map(s => [UPSERT, [s.chain, s.name, s.address, s.city, s.country, s.timezone, s.lat, s.lng, s.opening_hours, s.osm_id, s.cell, s.created_at]]);
+      const stmts = unique.map(s => [UPSERT, upsertParams(s)]);
       stmts.push([`INSERT INTO osm_tiles (tile,status,fetched_at,next_try_at,stores) VALUES (?,?,?,NULL,?)
         ON CONFLICT(tile) DO UPDATE SET status='ok', fetched_at=excluded.fetched_at, next_try_at=NULL, stores=excluded.stores`, [key, 'ok', now, unique.length]]);
       await o.db.batch(stmts);
@@ -203,5 +206,5 @@ function createOsm(opts = {}) {
   return { ensure, stats, state, options: o };
 }
 
-module.exports = { createOsm, chainFor, elementToStore, UPSERT, tileOf, tileBox, overpassQuery, TILE_DEG,
+module.exports = { createOsm, chainFor, elementToStore, UPSERT, upsertParams, tileOf, tileBox, overpassQuery, TILE_DEG,
   ATTRIBUTION: '© OpenStreetMap contributors, ODbL', ATTRIBUTION_URL: 'https://www.openstreetmap.org/copyright' };

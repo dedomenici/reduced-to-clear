@@ -5,13 +5,14 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test test/api.test.js test/alerts.test.js",
+    "test": "node --test test/api.test.js test/alerts.test.js test/names.test.js",
     "import-osm": "node scripts/import-osm.js",
     "test:ui": "node test/ui-smoke.js",
     "test:mobile": "node test/mobile-smoke.js",
     "export-stores": "node scripts/export-stores.js",
     "test:libsql": "node scripts/test-libsql.js",
-    "build-currency": "node scripts/build-currency.js"
+    "build-currency": "node scripts/build-currency.js",
+    "make-icons": "node scripts/make-icons.js"
   },
   "keywords": [],
   "author": "",
