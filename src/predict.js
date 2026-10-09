@@ -40,25 +40,23 @@ function learnedWindows(hist, dow) {
 
 function confidenceFor(n) { return n >= 15 ? 'high' : n >= 6 ? 'medium' : 'low'; }
 
-function chainWindows(db, chain, country, dow) {
+// chainRows: rows from chain_predictions (cached in memory by the app; they only change when seeds change).
+function chainWindows(chainRows, chain, country, dow) {
   const dayType = dow === 0 ? 'sun' : 'mon-sat';
-  return db.all('SELECT * FROM chain_predictions WHERE chain = ? AND country = ? AND (days = ? OR days = ?) ORDER BY start_hour',
-    [chain, country, dayType, 'all']).map(r => ({
-      start: r.start_hour, end: r.end_hour, label: r.label, confidence: r.confidence,
-      source: { title: r.source_title, url: r.source_url },
-    }));
+  return chainRows.filter(r => r.chain === chain && r.country === country && (r.days === dayType || r.days === 'all'))
+    .sort((a, b) => (a.start_hour ?? -1) - (b.start_hour ?? -1))
+    .map(r => ({ start: r.start_hour, end: r.end_hour, label: r.label, confidence: r.confidence, source: { title: r.source_title, url: r.source_url } }));
 }
 
-// Prediction for a store on a given day (dow in store-local time).
-function predictStore(db, store, dow) {
-  const seen = db.all('SELECT seen_at FROM posts WHERE store_id = ?', [store.id]).map(r => r.seen_at);
-  const out = { isPrediction: true, day: DOW[dow], learned: null, chain: chainWindows(db, store.chain, store.country, dow) };
-  if (seen.length >= MIN_REPORTS) {
-    const hist = histogram(seen, store.timezone);
+// Pure function: prediction for a store on a given day (dow in store-local time) from its report times.
+function predictStore(store, dow, seenTimes, chainRows) {
+  const out = { isPrediction: true, day: DOW[dow], learned: null, chain: chainWindows(chainRows, store.chain, store.country, dow) };
+  if (seenTimes.length >= MIN_REPORTS) {
+    const hist = histogram(seenTimes, store.timezone);
     out.learned = {
-      reports: seen.length, confidence: confidenceFor(seen.length),
+      reports: seenTimes.length, confidence: confidenceFor(seenTimes.length),
       windows: learnedWindows(hist, dow).map(w => ({ start: w.start, end: w.end })),
-      basis: `Learned from ${seen.length} community reports at this store`,
+      basis: `Learned from ${seenTimes.length} community reports at this store`,
     };
   }
   return out;

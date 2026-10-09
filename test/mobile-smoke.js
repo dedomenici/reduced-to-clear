@@ -7,7 +7,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex');
 
 (async () => {
-  const srv = await tempServer();
+  const srv = await tempServer({ env: { PHOTOS_ENABLED: 'true' } });
   const browser = await puppeteer.launch({ executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox'] });
   const results = {}; const errors = [];
   try {

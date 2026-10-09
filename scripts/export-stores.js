@@ -4,8 +4,8 @@ const fs = require('fs');
 const config = require('../src/config');
 const { openDb } = require('../src/db');
 (async () => {
-  const db = await openDb(config.dbFile);
-  const stores = db.all('SELECT chain,name,address,city,country,timezone,lat,lng,opening_hours,osm_id FROM stores WHERE osm_id IS NOT NULL ORDER BY osm_id')
+  const db = await openDb({ file: config.dbFile, tursoUrl: config.tursoUrl, tursoToken: config.tursoToken });
+  const stores = (await db.all('SELECT chain,name,address,city,country,timezone,lat,lng,opening_hours,osm_id FROM stores WHERE osm_id IS NOT NULL ORDER BY osm_id'))
     .map(s => Object.fromEntries(Object.entries(s).filter(([, v]) => v !== null)));
   const out = { attribution: '© OpenStreetMap contributors, available under the Open Database License (ODbL) https://www.openstreetmap.org/copyright',
     generated: new Date().toISOString(), source: 'Overpass API, shop=supermarket (+ branded convenience) in Greater London', stores };

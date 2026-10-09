@@ -24,7 +24,7 @@ const BRANDS = [
   }
   if (!res.ok) throw new Error('All Overpass endpoints failed');
   const { elements } = await res.json();
-  const db = await openDb(config.dbFile);
+  const db = await openDb({ file: config.dbFile, tursoUrl: config.tursoUrl, tursoToken: config.tursoToken });
   const tz = config.countries[country].cities[city]?.timezone || config.countries[country].timezone;
   let added = 0;
   for (const e of elements) {
@@ -32,12 +32,12 @@ const BRANDS = [
     const hit = BRANDS.find(([re]) => re.test(label)); if (!hit) continue;
     const lat = e.lat ?? e.center?.lat, lng = e.lon ?? e.center?.lon; if (lat == null) continue;
     const osmId = `${e.type}/${e.id}`;
-    if (db.get('SELECT id FROM stores WHERE osm_id = ?', [osmId])) continue;
+    if (await db.get('SELECT id FROM stores WHERE osm_id = ?', [osmId])) continue;
     const addr = [t['addr:housenumber'], t['addr:street'], t['addr:postcode']].filter(Boolean).join(' ') || null;
-    db.run(`INSERT INTO stores (chain,name,address,city,country,timezone,lat,lng,opening_hours,osm_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    await db.run(`INSERT INTO stores (chain,name,address,city,country,timezone,lat,lng,opening_hours,osm_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
       [hit[1], t.name || hit[1], addr, city, country, tz, lat, lng, t.opening_hours || null, osmId, new Date().toISOString()]);
     added++;
   }
-  db.flush();
+  await db.flush();
   console.log(`Imported ${added} stores (of ${elements.length} OSM elements). Data © OpenStreetMap contributors (ODbL).`);
 })().catch(e => { console.error(e.message); process.exit(1); });

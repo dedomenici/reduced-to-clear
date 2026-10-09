@@ -29,7 +29,7 @@ async function gate(who) { await req(who, 'POST', '/gate', { form: new URLSearch
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex');
 
 test.before(async () => {
-  app = await createApp({ dbFile: ':memory:' });
+  app = await createApp({ dbFile: ':memory:', tursoUrl: process.env.TEST_TURSO_URL || '', photosEnabled: true, quiet: true });
   await new Promise(r => { server = app.listen(0, r); });
   base = `http://127.0.0.1:${server.address().port}`;
 });
@@ -37,7 +37,9 @@ test.after(() => server.close());
 
 test('healthz is public; stores seeded from committed JSON on first start', async () => {
   const r = await req('anon', 'GET', '/healthz'); assert.strictEqual(r.status, 200); assert.strictEqual(r.data.ok, true);
-  assert.ok(app.locals.db.get('SELECT COUNT(*) AS n FROM stores').n > 1000, 'stores seeded');
+  assert.ok((await app.locals.db.get('SELECT COUNT(*) AS n FROM stores')).n > 1000, 'stores seeded');
+  assert.strictEqual(app.locals.db.kind, process.env.TEST_TURSO_URL ? 'libsql-file' : 'sqljs-memory');
+  assert.strictEqual((await app.locals.db.get('SELECT MAX(version) AS v FROM schema_migrations')).v, require('../src/db').MIGRATIONS.length);
 });
 
 test('site gate blocks everything until password entered', async () => {
@@ -135,7 +137,7 @@ test('predictions: chain seeds + learned per-store histogram', async () => {
   assert.ok(tesco.prediction.chain.some(w => w.start === 19 && w.source.url.includes('mirror.co.uk')), 'seeded Tesco 19:00 window with source');
   // Insert historical reports: Wednesdays ~19:30 London time (18:30Z in BST)
   for (const d of ['2026-09-16', '2026-09-23', '2026-09-30', '2026-10-07']) {
-    db.run(`INSERT INTO posts (user_id,store_id,items,seen_at,created_at,lat,lng,country,currency) VALUES (1,?,?,?,?,?,?, 'GB','GBP')`,
+    await db.run(`INSERT INTO posts (user_id,store_id,items,seen_at,created_at,lat,lng,country,currency) VALUES (1,?,?,?,?,?,?, 'GB','GBP')`,
       [tesco.id, 'hist', `${d}T18:30:00Z`, `${d}T18:31:00Z`, tesco.lat, tesco.lng]);
   }
   r = await req('bob', 'GET', `/api/stores/${tesco.id}/predictions`);
@@ -143,6 +145,44 @@ test('predictions: chain seeds + learned per-store histogram', async () => {
   assert.ok(wed.learned && wed.learned.reports >= 3);
   assert.ok(wed.learned.windows.some(w => w.start <= 19 && w.end >= 20), 'learned window covers 19:00–20:00 local: ' + JSON.stringify(wed.learned.windows));
   assert.match(r.data.note, /PREDICTIONS/);
+});
+
+test('photos disabled: upload UI flag off, posts accepted, file parts ignored', async () => {
+  const app2 = await createApp({ dbFile: ':memory:', tursoUrl: '', photosEnabled: false, quiet: true, seedStoresFile: null });
+  const srv2 = await new Promise(r => { const s = app2.listen(0, () => r(s)); });
+  const b2 = `http://127.0.0.1:${srv2.address().port}`;
+  try {
+    const g = await fetch(b2 + '/gate', { method: 'POST', body: new URLSearchParams({ password: config.sitePassword }), redirect: 'manual' });
+    let cookie = g.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
+    const cfg = await (await fetch(b2 + '/api/config', { headers: { Cookie: cookie } })).json();
+    assert.strictEqual(cfg.photosEnabled, false);
+    const reg = await fetch(b2 + '/api/register', { method: 'POST', headers: { Cookie: cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ email: 'np@example.com', password: 'password9', displayName: 'NoPhoto' }) });
+    cookie += '; ' + reg.headers.getSetCookie().map(c => c.split(';')[0]).join('; ');
+    const before = fs.readdirSync(config.uploadsDir).length;
+    const fd = new FormData(); fd.set('chain', 'Aldi'); fd.set('items', 'no photo mode'); fd.set('lat', '51.5'); fd.set('lng', '-0.1');
+    fd.set('photo', new Blob([PNG], { type: 'image/png' }), 'p.png');
+    const r = await fetch(b2 + '/api/posts', { method: 'POST', headers: { Cookie: cookie }, body: fd });
+    const j = await r.json();
+    assert.strictEqual(r.status, 201, JSON.stringify(j)); assert.strictEqual(j.post.photo_url, null);
+    assert.strictEqual(fs.readdirSync(config.uploadsDir).length, before, 'no file written');
+    const up = await fetch(b2 + '/uploads/anything.jpg', { headers: { Cookie: cookie } }); assert.strictEqual(up.status, 404);
+  } finally { srv2.close(); }
+});
+
+test('hosted mode requires SITE_SECRET from env and never writes it to disk', () => {
+  const { spawnSync } = require('child_process');
+  const os = require('os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rtc-hosted-'));
+  const base = { ...process.env, SITE_PASSWORD: 'x', DATA_DIR: dir, RENDER: 'true' };
+  delete base.SITE_SECRET;
+  let r = spawnSync(process.execPath, ['-e', "require('./src/config')"], { cwd: config.ROOT, env: base, encoding: 'utf8' });
+  assert.strictEqual(r.status, 1); assert.match(r.stderr, /SITE_SECRET/);
+  r = spawnSync(process.execPath, ['-e', "const c=require('./src/config');console.log(c.hosted, c.siteSecret)"], { cwd: config.ROOT, env: { ...base, SITE_SECRET: 'from-env' }, encoding: 'utf8' });
+  assert.strictEqual(r.status, 0); assert.strictEqual(r.stdout.trim(), 'true from-env');
+  assert.ok(!fs.existsSync(path.join(dir, 'secret')), 'secret not written to disk');
+  r = spawnSync(process.execPath, ['-e', "require('./src/config')"], { cwd: config.ROOT, env: { ...base, RENDER: '', SITE_SECRET: 's', TURSO_DATABASE_URL: 'libsql://x.turso.io' }, encoding: 'utf8' });
+  assert.strictEqual(r.status, 1); assert.match(r.stderr, /TURSO_AUTH_TOKEN/);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('localParts handles timezone/DST', () => {

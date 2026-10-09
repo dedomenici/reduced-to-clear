@@ -8,7 +8,7 @@ Research behind it (data sources, chain reduction times, legal notes): [RESEARCH
 - **Browse without an account.** Anyone past the gate sees the map and the feed. The feed shows the newest posts first, with how long ago each was posted, the clock time, and the time the items were seen.
 - **Your location and what's nearby.** Use "📍 Near me" (browser geolocation) or search a postcode or place (Nominatim), then pick a radius of 1, 3, 10 or 25 km. Posts and stores are filtered by distance.
 - **Accounts protect against sabotage.** You must register to post, edit or delete your own posts, or mark a post "all gone". There are also hourly limits (10 posts, 30 all-gone marks), a honeypot field on the sign-up form, and checks that the time seen is within the last 24 hours and not in the future. Each post shows who posted it and who marked it all gone. An "all gone" mark can be undone by the poster or by whoever set it.
-- **Post form.** Supermarket (chain list or "Other"), branch name, address, items, prices/notes, time seen, location (your location or pick on the map), country and city, and a photo. Before upload, the browser resizes the photo and re-encodes it, which removes EXIF data including GPS. The post's currency comes from the country.
+- **Post form.** Supermarket (chain list or "Other"), branch name, address, items, prices/notes, time seen, location (your location or pick on the map), country and city, and an optional photo. Photos are **only offered when `PHOTOS_ENABLED=true`**, because they need persistent file storage. When photos are off, the photo controls are hidden and the server accepts posts without photos (any file sent is ignored). Before upload, the browser resizes the photo and re-encodes it, which removes EXIF data including GPS. The post's currency comes from the country.
 - **Live updates.** New posts arrive over Server-Sent Events (`/api/stream`). If the stream drops, the page checks for new posts every 30 seconds instead. New posts play a ping (turn it on with "🔔 Sound on", because browsers block audio until you interact with the page) and get a red **NEW** sticker. Posts made since your last visit are also marked NEW.
 - **Predictions, always labelled PREDICTION.** These show as dashed purple pins with a "PREDICTION" tag in the popup, plus a week view.
   - *Chain typical:* reduction windows for 10 UK chains, seeded from `seeds/chain-predictions.json`. Each comes from a source cited in RESEARCH.md and carries a confidence level.
@@ -31,53 +31,71 @@ Research behind it (data sources, chain reduction times, legal notes): [RESEARCH
   - Installing needs HTTPS (or localhost).
 
 ## Stack
-Node 20+, Express, SQLite via `sql.js` (WASM, no native build; the database is saved to `data/rtc.sqlite`), Multer for uploads, bcrypt for passwords, Leaflet with OpenStreetMap tiles. The frontend is plain JavaScript with no build step.
+- Node 20+, Express 5, bcrypt for passwords, Multer for uploads, and Leaflet with OpenStreetMap tiles. The frontend is plain JavaScript with no build step.
+- **Database (one async API in `src/db.js`, with two backends):**
+  - **Turso / libSQL** (`@libsql/client`) when `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` are set. This is the free hosted option.
+  - A **local SQLite file** via `sql.js` (WebAssembly, no native build) otherwise, saved to `data/rtc.sqlite`.
+  - Both run the same numbered migrations, tracked in a `schema_migrations` table. Both seed stores on first start, using batched writes so seeding is fast against remote Turso. To change the schema, append a migration to `MIGRATIONS` and never edit an applied one.
 
-## Run
+## Run locally
 ```bash
 cd reduced-to-clear
 npm install
 cp .env.example .env        # then set SITE_PASSWORD
 npm start                   # http://localhost:3000 — on first start ~1,800 London stores are seeded from seeds/stores-london.json
 ```
+The startup log shows the database backend, the schema version, whether photos are on, and whether it's running in local or hosted mode.
+
 Environment settings (see `.env.example`):
-- `SITE_PASSWORD` (required; the server refuses to start without it)
-- `SITE_SECRET` (optional; otherwise a random one is generated in `DATA_DIR/secret`)
-- `PORT` (default 3000; hosting platforms set this for you)
-- `DATA_DIR` (default `./data`; holds the database, secret and, when set, uploads)
-- `DB_FILE` and `UPLOADS_DIR` (optional overrides)
+
+| Var | Default | Notes |
+|---|---|---|
+| `SITE_PASSWORD` | — | **Required.** Password for the access gate. |
+| `TURSO_DATABASE_URL` / `TURSO_AUTH_TOKEN` | unset | When set, the app uses Turso. If a remote URL is set without a token, the server refuses to start. |
+| `SITE_SECRET` | generated | Signs the gate cookie. **Hosted mode** (remote Turso, or running on Render/Railway, or `HOSTED=true`): must be set in the environment. It is never written to disk, and the app refuses to start without it. Locally it is generated into `DATA_DIR/secret` if unset. |
+| `PHOTOS_ENABLED` | off | Set to `true` only if uploads go to persistent storage. |
+| `PORT` | 3000 | Set automatically by hosting platforms. |
+| `DATA_DIR`, `DB_FILE`, `UPLOADS_DIR` | `./data`, `DATA_DIR/rtc.sqlite`, `./uploads` | Local storage paths. |
 
 Store data:
 - `npm run import-osm` refreshes stores from OpenStreetMap (Overpass).
 - `npm run export-stores` rewrites `seeds/stores-london.json` from the database.
 - The seed file is only imported when the stores table is empty.
 
-## Deploy
+## Deploy for free (Render free plan + Turso free plan, no subscriptions)
 
-### Render (blueprint included: `render.yaml`)
-1. In Render, go to **New → Blueprint** and connect GitHub. Pick this repository and keep the `main` branch.
-2. Render reads `render.yaml`. When asked for **SITE_PASSWORD**, enter the gate password. `SITE_SECRET` is generated for you.
-3. Click **Apply**. Render runs `npm ci --omit=dev` and then `npm start`, and checks `/healthz`. On first boot it seeds the stores onto the disk at `/var/data`.
-4. Open `https://reduced-to-clear.onrender.com` (or whatever URL Render assigns) and enter the password.
-5. Later commits to `main` deploy automatically. To change the password, edit **Environment → SITE_PASSWORD** and save; this redeploys and logs everyone out of the gate.
+**1. Create the database on Turso** (free plan, no credit card: 5 GB storage, 500 million row reads and 10 million row writes per month, per https://turso.tech/pricing):
+```bash
+curl -sSfL https://get.tur.so/install.sh | bash      # install the Turso CLI (or use the web dashboard at app.turso.tech)
+turso auth signup                                    # or: turso auth login
+turso db create reduced-to-clear                     # optionally add --location <id> near London; `turso db locations` lists them
+turso db show reduced-to-clear --url                 # → TURSO_DATABASE_URL (libsql://...)
+turso db tokens create reduced-to-clear              # → TURSO_AUTH_TOKEN (keep it secret)
+```
+There's no need to create tables. The app runs its migrations and seeds the stores on first start.
 
-**Free vs paid:**
-- The blueprint uses a paid plan with a 1 GB persistent disk, so posts, accounts and photos are kept.
-- Render's free web services **cannot attach disks**. On free, set `plan: free`, remove the `disk:` block and `DATA_DIR`. All user data is then lost whenever the service restarts, redeploys or sleeps after inactivity. Stores re-seed automatically.
-- A disk also limits the service to one instance and disables zero-downtime deploys, which is fine at this scale.
-- The longer-term fix is to move to Postgres and object storage (for example S3 or R2) for photos.
+**2. Deploy on Render** (free plan: https://render.com/docs/free):
+1. Go to **New → Blueprint**, connect GitHub, and pick `dedomenici/reduced-to-clear` on the `main` branch.
+2. Render reads `render.yaml` (free plan, Frankfurt region, no disk). It prompts for **SITE_PASSWORD**, **TURSO_DATABASE_URL** and **TURSO_AUTH_TOKEN**. `SITE_SECRET` is generated automatically.
+3. Click **Apply**. The build runs `npm ci --omit=dev`, the app starts with `npm start`, and `/healthz` is checked. The first boot logs `DB: libsql-remote (schema v2) · photos disabled · hosted mode` and `Seeded 1803 stores`.
+4. Open the `https://<service>.onrender.com` URL and enter the password.
+5. Later pushes to `main` deploy automatically. Values marked `sync: false` are only asked for on first creation; change them later under **Environment**.
 
-### Railway (alternative)
-1. Go to **New Project → Deploy from GitHub repo** and pick this repository. Nixpacks detects Node, runs `npm ci`, then `npm start`. `PORT` is set automatically.
-2. Under **Variables**, add `SITE_PASSWORD`, `SITE_SECRET` (any long random string) and `DATA_DIR=/data`.
-3. Right-click the service, choose **Attach Volume** and set the mount path to `/data`.
-4. Under **Settings → Networking**, click **Generate Domain**.
+**Free-tier trade-offs:**
+- **Cold starts:** Render's free service sleeps after 15 minutes without incoming requests. The next visit takes about a minute to wake it. There are 750 free instance hours per month per workspace, which is enough for one always-on service.
+- **No data loss:** all posts, accounts and predictions live in Turso, so restarts, redeploys and sleeping don't lose data. Live-update clients reconnect on their own.
+- **No photos:** the free plan has no persistent disk, so photos stay off. To add them later, set `PHOTOS_ENABLED=true` with persistent storage (a paid Render disk with `UPLOADS_DIR` on it), or add an object-storage backend such as R2 or S3. The upload code path is kept for this.
+- **Turso limits:** if a free-plan limit is exceeded, Turso blocks the database until the next month or until you upgrade. That's far beyond this app's expected use.
+
+### Railway (alternative, has a free trial but not a permanent free tier)
+Use the same steps with the same environment variables (`SITE_PASSWORD`, `SITE_SECRET`, `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`): **New Project → Deploy from GitHub repo**, add the variables, then **Settings → Networking → Generate Domain**.
 
 ## Test
 ```bash
-npm test                    # API tests on an in-memory DB (gate, auth, posting+photo, SSE, edit/gone permissions, validation, rate limits, predictions, timezone/DST)
-npm run test:ui             # headless Chrome (desktop): gate → register → post → second browser gets live NEW post → all gone
-npm run test:mobile         # 390x844 touch emulation: layout, touch targets, bottom sheet, full-screen form, camera input, PWA; writes test/screenshot-mobile*.png
+npm test                    # API tests on an in-memory local SQLite DB (gate, auth, posting+photo, photos-disabled mode, hosted-mode secret rules, SSE, permissions, validation, rate limits, migrations, seeding, predictions, DST)
+npm run test:libsql         # the same API tests through @libsql/client (the Turso driver) against a local file: URL
+npm run test:ui             # headless Chrome (desktop, photos disabled): gate → register → post (photo UI hidden) → second browser gets live NEW post → all gone
+npm run test:mobile         # 390x844 touch emulation (photos enabled): layout, touch targets, bottom sheet, full-screen form, camera input, PWA; writes test/screenshot-mobile*.png
 ```
 The browser tests start their own server on a spare port using a **copy** of `data/rtc.sqlite`, so real data is never touched. Uploaded test photos are removed afterwards. They need Chrome (`CHROME_PATH`, default `/usr/bin/google-chrome`).
 
@@ -96,6 +114,6 @@ The browser tests start their own server on a spare port using a **copy** of `da
 
 ## Before going public (not done in prototype)
 - Email verification and/or phone or OAuth sign-in; reporting and moderation; trust scores (for example, LiveCheaper-style multi-report verification).
-- HTTPS with `secure` cookies, CSRF tokens (cookies are SameSite=Lax for now), and image scanning and storage on S3 or similar.
+- CSRF tokens (cookies are SameSite=Lax and `secure` over HTTPS for now), and photo storage on S3 or R2 with image scanning.
 - A commercial tile provider instead of tile.openstreetmap.org (OSMF tile usage policy), plus Postgres/PostGIS for scale.
 - A UK GDPR privacy notice and retention policy for accounts, locations and photos.

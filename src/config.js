@@ -1,4 +1,4 @@
-// Loads .env (simple KEY=VALUE parser) and exposes config. The site password lives ONLY here (server side).
+// Loads .env (simple KEY=VALUE parser) and exposes config. Secrets live ONLY here (server side).
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -10,26 +10,38 @@ if (fs.existsSync(envFile)) {
     if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2];
   }
 }
-// DATA_DIR holds the SQLite DB, uploads and generated secret. On Render point it at the persistent disk (e.g. /var/data).
-const DATA_DIR = path.resolve(ROOT, process.env.DATA_DIR || 'data');
+const env = process.env;
+const fail = msg => { console.error('Config error: ' + msg); process.exit(1); };
+
+// Database: Turso/libSQL when TURSO_DATABASE_URL is set, else a local SQLite file.
+const tursoUrl = env.TURSO_DATABASE_URL || '';
+const tursoToken = env.TURSO_AUTH_TOKEN || '';
+if (tursoUrl && !tursoUrl.startsWith('file:') && !tursoToken) fail('TURSO_DATABASE_URL is set but TURSO_AUTH_TOKEN is missing.');
+// Hosted mode = remote DB or running on a hosting platform. In hosted mode nothing secret is written to disk.
+const hosted = (!!tursoUrl && !tursoUrl.startsWith('file:')) || !!env.RENDER || !!env.RAILWAY_ENVIRONMENT || env.HOSTED === 'true';
+
+const DATA_DIR = path.resolve(ROOT, env.DATA_DIR || 'data');
 function secret() {
-  if (process.env.SITE_SECRET) return process.env.SITE_SECRET;
-  const f = path.join(DATA_DIR, 'secret');
+  if (env.SITE_SECRET) return env.SITE_SECRET;
+  if (hosted) fail('SITE_SECRET env var is required in hosted mode (it is never written to disk there).');
+  const f = path.join(DATA_DIR, 'secret'); // local dev convenience only
   if (!fs.existsSync(f)) { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, crypto.randomBytes(32).toString('hex')); }
   return fs.readFileSync(f, 'utf8').trim();
 }
-if (!process.env.SITE_PASSWORD) {
-  console.error('SITE_PASSWORD is not set (see .env.example). Refusing to start without a site gate password.');
-  process.exit(1);
-}
+if (!env.SITE_PASSWORD) fail('SITE_PASSWORD is not set (see .env.example). Refusing to start without a site gate password.');
+
 module.exports = {
   ROOT,
-  port: Number(process.env.PORT || 3000),
+  hosted,
+  port: Number(env.PORT || 3000),
   dataDir: DATA_DIR,
-  dbFile: process.env.DB_FILE || path.join(DATA_DIR, 'rtc.sqlite'),
-  sitePassword: process.env.SITE_PASSWORD,
+  dbFile: env.DB_FILE || path.join(DATA_DIR, 'rtc.sqlite'),
+  tursoUrl, tursoToken,
+  sitePassword: env.SITE_PASSWORD,
   siteSecret: secret(),
-  uploadsDir: path.resolve(ROOT, process.env.UPLOADS_DIR || (process.env.DATA_DIR ? path.join(DATA_DIR, 'uploads') : 'uploads')),
+  // Photo uploads need persistent file storage. Off unless PHOTOS_ENABLED=true (free hosting has no persistent disk).
+  photosEnabled: env.PHOTOS_ENABLED === 'true',
+  uploadsDir: path.resolve(ROOT, env.UPLOADS_DIR || (env.DATA_DIR ? path.join(DATA_DIR, 'uploads') : 'uploads')),
   seedStoresFile: path.join(ROOT, 'seeds', 'stores-london.json'),
   // International expansion: add countries/cities here.
   countries: {

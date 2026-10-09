@@ -336,6 +336,7 @@
     soundBtn(); drawCenter();
     const [{ user }, cfg] = await Promise.all([api('/api/me'), api('/api/config')]);
     st.cfg = cfg; setUser(user);
+    $('#photo-fieldset').hidden = !cfg.photosEnabled; // photos need persistent storage (PHOTOS_ENABLED=true)
     $('#chain-select').replaceChildren(...cfg.chains.map(c => el('option', { value: c }, c)));
     $('#country-select').replaceChildren(...Object.entries(cfg.countries).map(([k, v]) => el('option', { value: k }, v.name)));
     await load(); startLive();

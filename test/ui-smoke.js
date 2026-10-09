@@ -6,7 +6,7 @@ const tempServer = require('./helpers/temp-server');
 let BASE = process.argv[2];
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 (async () => {
-  const srv = BASE ? null : await tempServer(); if (srv) BASE = srv.base;
+  const srv = BASE ? null : await tempServer({ env: { PHOTOS_ENABLED: 'false' } }); if (srv) BASE = srv.base;
   const browser = await puppeteer.launch({ executablePath: process.env.CHROME_PATH || '/usr/bin/google-chrome', headless: 'new', args: ['--no-sandbox'] });
   const errors = [];
   async function open() {
@@ -33,6 +33,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   await poster.waitForFunction(() => document.querySelector('#who').textContent.includes('Richard'));
   await poster.click('#btn-new');
   await poster.waitForSelector('#dlg-post[open]');
+  const photoUiHidden = await poster.$eval('#photo-fieldset', f => f.hidden && f.offsetParent === null);
   await poster.select('#chain-select', 'Co-op');
   await poster.type('input[name=store_name]', 'Co-op UI Test');
   await poster.type('textarea[name=items]', 'UI test: sandwiches 75% off');
@@ -48,7 +49,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   poster.on('dialog', d => d.accept());
   await poster.evaluate(() => [...document.querySelectorAll('#feed button')].find(b => b.textContent.includes('All gone')).click());
   await watcher.waitForFunction(() => !document.querySelector('#feed').textContent.includes('UI test: sandwiches') || document.querySelector('.post.gone'), { timeout: 8000 });
-  console.log(JSON.stringify({ liveUpdateReceived: true, newBadgeShown: hasNew, predictionPins: predPins, pageErrors: errors }, null, 1));
+  console.log(JSON.stringify({ liveUpdateReceived: true, newBadgeShown: hasNew, photoUiHiddenWhenDisabled: photoUiHidden, predictionPins: predPins, pageErrors: errors }, null, 1));
   await browser.close(); if (srv) srv.stop();
-  if (!hasNew || errors.length) process.exit(1);
+  if (!hasNew || !photoUiHidden || errors.length) process.exit(1);
 })().catch(e => { console.error('UI smoke FAILED:', e.message); process.exit(1); }).finally(() => setTimeout(() => process.exit(), 500).unref());

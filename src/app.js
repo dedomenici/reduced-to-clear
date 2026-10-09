@@ -25,35 +25,44 @@ function bbox(lat, lng, km) {
 }
 const clean = (s, max) => String(s ?? '').trim().slice(0, max);
 
-function seedPredictions(db) {
-  db.run('DELETE FROM chain_predictions');
+async function seedPredictions(db) {
+  const stmts = [['DELETE FROM chain_predictions', []]];
   for (const w of seeds.windows) {
     const s = seeds.sources[w.src] || {};
-    db.run(`INSERT INTO chain_predictions (chain,country,days,start_hour,end_hour,label,confidence,source_title,source_url)
-            VALUES (?,?,?,?,?,?,?,?,?)`, [w.chain, w.country, w.days, w.start, w.end, w.label, w.confidence, s.title || null, s.url || null]);
+    stmts.push([`INSERT INTO chain_predictions (chain,country,days,start_hour,end_hour,label,confidence,source_title,source_url)
+            VALUES (?,?,?,?,?,?,?,?,?)`, [w.chain, w.country, w.days, w.start, w.end, w.label, w.confidence, s.title || null, s.url || null]]);
   }
+  await db.batch(stmts);
+  return db.all('SELECT * FROM chain_predictions');
 }
 
 // First start (empty stores table): import the committed OSM store snapshot so the map isn't empty.
-function seedStores(db, file) {
+// Uses batched writes so it is fast against remote Turso too.
+async function seedStores(db, file) {
   if (!file || !fs.existsSync(file)) return 0;
-  if (db.get('SELECT COUNT(*) AS n FROM stores').n > 0) return 0;
+  if ((await db.get('SELECT COUNT(*) AS n FROM stores')).n > 0) return 0;
   const { stores } = JSON.parse(fs.readFileSync(file, 'utf8'));
   const now = nowIso();
-  for (const s of stores) {
-    db.run(`INSERT OR IGNORE INTO stores (chain,name,address,city,country,timezone,lat,lng,opening_hours,osm_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-      [s.chain, s.name, s.address || null, s.city, s.country, s.timezone, s.lat, s.lng, s.opening_hours || null, s.osm_id || null, now]);
-  }
-  db.flush();
+  await db.batch(stores.map(s => [`INSERT OR IGNORE INTO stores (chain,name,address,city,country,timezone,lat,lng,opening_hours,osm_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+    [s.chain, s.name, s.address || null, s.city, s.country, s.timezone, s.lat, s.lng, s.opening_hours || null, s.osm_id || null, now]]));
+  await db.flush();
   return stores.length;
 }
 
 async function createApp(opts = {}) {
-  fs.mkdirSync(config.uploadsDir, { recursive: true });
-  const db = await openDb(opts.dbFile || config.dbFile);
-  seedPredictions(db);
-  const seeded = seedStores(db, opts.seedStoresFile === undefined ? config.seedStoresFile : opts.seedStoresFile);
-  if (seeded) console.log(`Seeded ${seeded} stores from ${path.basename(config.seedStoresFile)} (© OpenStreetMap contributors, ODbL)`);
+  const photosEnabled = opts.photosEnabled !== undefined ? opts.photosEnabled : config.photosEnabled;
+  if (photosEnabled) fs.mkdirSync(config.uploadsDir, { recursive: true });
+  const db = await openDb({
+    file: opts.dbFile || config.dbFile,
+    tursoUrl: opts.tursoUrl !== undefined ? opts.tursoUrl : config.tursoUrl,
+    tursoToken: opts.tursoToken !== undefined ? opts.tursoToken : config.tursoToken,
+  });
+  const chainRows = await seedPredictions(db); // cached: static between deploys
+  const seeded = await seedStores(db, opts.seedStoresFile === undefined ? config.seedStoresFile : opts.seedStoresFile);
+  if (!opts.quiet) {
+    console.log(`DB: ${db.kind} (schema v${db.schemaVersion}) · photos ${photosEnabled ? 'enabled' : 'disabled'} · ${config.hosted ? 'hosted' : 'local'} mode`);
+    if (seeded) console.log(`Seeded ${seeded} stores from ${path.basename(config.seedStoresFile)} (© OpenStreetMap contributors, ODbL)`);
+  }
   const app = express();
   app.disable('x-powered-by');
   app.set('trust proxy', 1); // behind Render/Railway's proxy: correct req.ip and req.secure
@@ -104,25 +113,25 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
 
   // ---------- Static (behind gate) ----------
   app.use(express.static(path.join(config.ROOT, 'public')));
-  app.use('/uploads', express.static(config.uploadsDir, { maxAge: '7d' }));
+  if (photosEnabled) app.use('/uploads', express.static(config.uploadsDir, { maxAge: '7d' }));
 
   // ---------- Accounts ----------
-  function currentUser(req) {
+  async function currentUser(req) {
     const t = req.cookies.rtc_session; if (!t) return null;
-    return db.get('SELECT u.id, u.email, u.display_name FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?', [t]) || null;
+    return (await db.get('SELECT u.id, u.email, u.display_name FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?', [t])) || null;
   }
-  app.use((req, res, next) => { req.user = currentUser(req); next(); });
+  app.use(async (req, res, next) => { req.user = await currentUser(req); next(); });
   const requireUser = (req, res, next) => req.user ? next() : res.status(401).json({ error: 'login_required' });
-  function startSession(res, userId, req) {
+  async function startSession(res, userId, req) {
     const token = crypto.randomBytes(32).toString('hex');
-    db.run('INSERT INTO sessions (token,user_id,created_at) VALUES (?,?,?)', [token, userId, nowIso()]);
+    await db.run('INSERT INTO sessions (token,user_id,created_at) VALUES (?,?,?)', [token, userId, nowIso()]);
     res.cookie('rtc_session', token, { httpOnly: true, sameSite: 'lax', secure: !!(req && req.secure), maxAge: 180 * 864e5 });
   }
-  function rateLimited(userId, kind, perHour) {
+  async function rateLimited(userId, kind, perHour) {
     const since = new Date(Date.now() - 3600e3).toISOString();
-    const n = db.get('SELECT COUNT(*) AS n FROM actions WHERE user_id = ? AND kind = ? AND at > ?', [userId, kind, since]).n;
+    const { n } = await db.get('SELECT COUNT(*) AS n FROM actions WHERE user_id = ? AND kind = ? AND at > ?', [userId, kind, since]);
     if (n >= perHour) return true;
-    db.run('INSERT INTO actions (user_id,kind,at) VALUES (?,?,?)', [userId, kind, nowIso()]);
+    await db.run('INSERT INTO actions (user_id,kind,at) VALUES (?,?,?)', [userId, kind, nowIso()]);
     return false;
   }
 
@@ -134,24 +143,24 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email' });
     if (name.length < 2) return res.status(400).json({ error: 'Display name must be at least 2 characters' });
     if (pw.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
-    if (db.get('SELECT id FROM users WHERE email = ?', [email])) return res.status(409).json({ error: 'Email already registered' });
+    if (await db.get('SELECT id FROM users WHERE email = ?', [email])) return res.status(409).json({ error: 'Email already registered' });
     const hash = await bcrypt.hash(pw, 10);
-    const { id } = db.run('INSERT INTO users (email,display_name,password_hash,created_at) VALUES (?,?,?,?)', [email, name, hash, nowIso()]);
-    startSession(res, id, req);
+    const { id } = await db.run('INSERT INTO users (email,display_name,password_hash,created_at) VALUES (?,?,?,?)', [email, name, hash, nowIso()]);
+    await startSession(res, id, req);
     res.json({ user: { id, email, display_name: name } });
   });
   app.post('/api/login', async (req, res) => {
-    const u = db.get('SELECT * FROM users WHERE email = ?', [clean(req.body.email, 200).toLowerCase()]);
+    const u = await db.get('SELECT * FROM users WHERE email = ?', [clean(req.body.email, 200).toLowerCase()]);
     if (!u || !(await bcrypt.compare(String(req.body.password || ''), u.password_hash))) return res.status(401).json({ error: 'Wrong email or password' });
-    startSession(res, u.id, req);
+    await startSession(res, u.id, req);
     res.json({ user: { id: u.id, email: u.email, display_name: u.display_name } });
   });
-  app.post('/api/logout', (req, res) => {
-    if (req.cookies.rtc_session) db.run('DELETE FROM sessions WHERE token = ?', [req.cookies.rtc_session]);
+  app.post('/api/logout', async (req, res) => {
+    if (req.cookies.rtc_session) await db.run('DELETE FROM sessions WHERE token = ?', [req.cookies.rtc_session]);
     res.clearCookie('rtc_session'); res.json({ ok: true });
   });
   app.get('/api/me', (req, res) => res.json({ user: req.user }));
-  app.get('/api/config', (req, res) => res.json({ countries: config.countries, chains: CHAINS }));
+  app.get('/api/config', (req, res) => res.json({ countries: config.countries, chains: CHAINS, photosEnabled }));
 
   // ---------- Live updates (SSE) ----------
   const clients = new Set();
@@ -172,14 +181,14 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
       u.display_name AS author, g.display_name AS gone_by_name
     FROM posts p JOIN stores s ON s.id = p.store_id JOIN users u ON u.id = p.user_id LEFT JOIN users g ON g.id = p.all_gone_by`;
   function shapePost(p, req, lat, lng) {
-    const out = { ...p, mine: !!(req.user && req.user.id === p.user_id), photo_url: p.photo ? '/uploads/' + p.photo : null };
+    const out = { ...p, mine: !!(req.user && req.user.id === p.user_id), photo_url: p.photo && photosEnabled ? '/uploads/' + p.photo : null };
     delete out.photo;
     if (lat != null) out.distance_km = Math.round(kmBetween(lat, lng, p.lat, p.lng) * 100) / 100;
     return out;
   }
-  const getPost = (id, req) => { const p = db.get(POST_SELECT + ' WHERE p.id = ?', [id]); return p && shapePost(p, req); };
+  const getPost = async (id, req) => { const p = await db.get(POST_SELECT + ' WHERE p.id = ?', [id]); return p && shapePost(p, req); };
 
-  app.get('/api/posts', (req, res) => {
+  app.get('/api/posts', async (req, res) => {
     const lat = req.query.lat != null ? Number(req.query.lat) : null, lng = req.query.lng != null ? Number(req.query.lng) : null;
     const radius = Math.min(Number(req.query.radius_km) || 3, 50);
     const where = [], params = [];
@@ -190,114 +199,135 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
     if (req.query.include_gone !== '1') where.push('p.all_gone_at IS NULL');
     const hours = Math.min(Number(req.query.hours) || 48, 24 * 30);
     where.push('p.created_at > ?'); params.push(new Date(Date.now() - hours * 3600e3).toISOString());
-    let rows = db.all(POST_SELECT + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY p.created_at DESC LIMIT 300', params)
+    let rows = (await db.all(POST_SELECT + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY p.created_at DESC LIMIT 300', params))
       .map(p => shapePost(p, req, lat, lng));
     if (lat != null) rows = rows.filter(p => p.distance_km <= radius);
     res.json({ posts: rows });
   });
 
-  const upload = multer({
+  // Photo uploads: stored on disk only when PHOTOS_ENABLED=true (needs persistent storage).
+  // When disabled, multipart posts are still accepted and any file part is silently ignored.
+  const imageTypes = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' };
+  const upload = multer(photosEnabled ? {
     storage: multer.diskStorage({
       destination: config.uploadsDir,
-      filename: (req, file, cb) => cb(null, crypto.randomBytes(12).toString('hex') + ({ 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' }[file.mimetype] || '')),
+      filename: (req, file, cb) => cb(null, crypto.randomBytes(12).toString('hex') + (imageTypes[file.mimetype] || '')),
     }),
     limits: { fileSize: config.limits.maxPhotoBytes, files: 1 },
-    fileFilter: (req, file, cb) => cb(null, ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)),
+    fileFilter: (req, file, cb) => cb(null, !!imageTypes[file.mimetype]),
+  } : {
+    storage: multer.memoryStorage(),
+    limits: { fileSize: config.limits.maxPhotoBytes, files: 1 },
+    fileFilter: (req, file, cb) => cb(null, false), // discard
   });
 
-  function findOrCreateStore(body, userId) {
+  async function findOrCreateStore(body, userId) {
     if (body.store_id) {
-      const s = db.get('SELECT * FROM stores WHERE id = ?', [Number(body.store_id)]);
+      const s = await db.get('SELECT * FROM stores WHERE id = ?', [Number(body.store_id)]);
       if (s) return s;
     }
     const chain = CHAINS.includes(body.chain) ? body.chain : 'Other';
     const chainName = chain === 'Other' ? clean(body.chain_other, 60) || 'Other' : chain;
     const lat = Number(body.lat), lng = Number(body.lng);
-    const near = db.all('SELECT * FROM stores WHERE chain = ? AND lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?', [chainName, ...bbox(lat, lng, 0.15)])
+    const near = (await db.all('SELECT * FROM stores WHERE chain = ? AND lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?', [chainName, ...bbox(lat, lng, 0.15)]))
       .filter(s => kmBetween(lat, lng, s.lat, s.lng) <= 0.15);
     if (near.length) return near[0];
     const country = config.countries[body.country] ? body.country : 'GB';
     const city = clean(body.city, 60) || 'London';
     const tz = config.countries[country].cities[city]?.timezone || config.countries[country].timezone;
     const name = clean(body.store_name, 80) || `${chainName} (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
-    const { id } = db.run(`INSERT INTO stores (chain,name,address,city,country,timezone,lat,lng,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+    const { id } = await db.run(`INSERT INTO stores (chain,name,address,city,country,timezone,lat,lng,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
       [chainName, name, clean(body.address, 160) || null, city, country, tz, lat, lng, userId, nowIso()]);
     return db.get('SELECT * FROM stores WHERE id = ?', [id]);
   }
 
-  app.post('/api/posts', requireUser, upload.single('photo'), (req, res) => {
-    const b = req.body;
-    const fail = (code, error) => { if (req.file) fs.unlink(req.file.path, () => {}); res.status(code).json({ error }); };
+  app.post('/api/posts', requireUser, upload.single('photo'), async (req, res) => {
+    const b = req.body || {};
+    const photoFile = photosEnabled && req.file ? req.file : null;
+    const fail = (code, error) => { if (photoFile) fs.unlink(photoFile.path, () => {}); res.status(code).json({ error }); };
     const items = clean(b.items, 1000);
     const lat = Number(b.lat), lng = Number(b.lng);
     if (!items) return fail(400, 'Say what items are reduced');
     if (!b.store_id && !(b.chain)) return fail(400, 'Choose the supermarket');
     if (!b.store_id && !(isFinite(lat) && isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180)) return fail(400, 'Set the location');
-    let seenAt = b.seen_at ? new Date(b.seen_at) : new Date();
+    const seenAt = b.seen_at ? new Date(b.seen_at) : new Date();
     if (isNaN(seenAt)) return fail(400, 'Invalid time');
     if (seenAt > new Date(Date.now() + 5 * 60e3)) return fail(400, 'Time cannot be in the future');
     if (seenAt < new Date(Date.now() - 24 * 3600e3)) return fail(400, 'Only post reductions seen in the last 24 hours');
-    if (rateLimited(req.user.id, 'post', config.limits.postsPerHour)) return fail(429, 'Posting limit reached, try again later');
-    const store = findOrCreateStore(b, req.user.id);
+    if (await rateLimited(req.user.id, 'post', config.limits.postsPerHour)) return fail(429, 'Posting limit reached, try again later');
+    const store = await findOrCreateStore(b, req.user.id);
     const currency = config.countries[store.country]?.currency || 'GBP';
-    const { id } = db.run(`INSERT INTO posts (user_id,store_id,items,price_note,photo,seen_at,created_at,lat,lng,city,country,currency)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [req.user.id, store.id, items, clean(b.price_note, 200) || null, req.file ? req.file.filename : null,
+    const { id } = await db.run(`INSERT INTO posts (user_id,store_id,items,price_note,photo,seen_at,created_at,lat,lng,city,country,currency)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [req.user.id, store.id, items, clean(b.price_note, 200) || null, photoFile ? photoFile.filename : null,
       seenAt.toISOString(), nowIso(), store.lat, store.lng, store.city, store.country, currency]);
-    const post = getPost(id, req);
+    const post = await getPost(id, req);
     broadcast('post', { ...post, mine: false });
     res.status(201).json({ post });
   });
 
-  app.patch('/api/posts/:id', requireUser, (req, res) => {
-    const p = db.get('SELECT * FROM posts WHERE id = ?', [Number(req.params.id)]);
+  const loadPost = id => db.get('SELECT * FROM posts WHERE id = ?', [Number(id)]);
+  app.patch('/api/posts/:id', requireUser, async (req, res) => {
+    const p = await loadPost(req.params.id);
     if (!p) return res.status(404).json({ error: 'not_found' });
     if (p.user_id !== req.user.id) return res.status(403).json({ error: 'You can only edit your own posts' });
     const items = req.body.items != null ? clean(req.body.items, 1000) : p.items;
     if (!items) return res.status(400).json({ error: 'Items cannot be empty' });
     const priceNote = req.body.price_note != null ? (clean(req.body.price_note, 200) || null) : p.price_note;
-    db.run('UPDATE posts SET items = ?, price_note = ?, updated_at = ? WHERE id = ?', [items, priceNote, nowIso(), p.id]);
-    const post = getPost(p.id, req); broadcast('update', { ...post, mine: false }); res.json({ post });
+    await db.run('UPDATE posts SET items = ?, price_note = ?, updated_at = ? WHERE id = ?', [items, priceNote, nowIso(), p.id]);
+    const post = await getPost(p.id, req); broadcast('update', { ...post, mine: false }); res.json({ post });
   });
-  app.delete('/api/posts/:id', requireUser, (req, res) => {
-    const p = db.get('SELECT * FROM posts WHERE id = ?', [Number(req.params.id)]);
+  app.delete('/api/posts/:id', requireUser, async (req, res) => {
+    const p = await loadPost(req.params.id);
     if (!p) return res.status(404).json({ error: 'not_found' });
     if (p.user_id !== req.user.id) return res.status(403).json({ error: 'You can only delete your own posts' });
-    db.run('DELETE FROM posts WHERE id = ?', [p.id]);
+    await db.run('DELETE FROM posts WHERE id = ?', [p.id]);
     if (p.photo) fs.unlink(path.join(config.uploadsDir, p.photo), () => {});
     broadcast('delete', { id: p.id }); res.json({ ok: true });
   });
-  app.post('/api/posts/:id/gone', requireUser, (req, res) => {
-    const p = db.get('SELECT * FROM posts WHERE id = ?', [Number(req.params.id)]);
+  app.post('/api/posts/:id/gone', requireUser, async (req, res) => {
+    const p = await loadPost(req.params.id);
     if (!p) return res.status(404).json({ error: 'not_found' });
-    if (p.all_gone_at) return res.json({ post: getPost(p.id, req) });
-    if (rateLimited(req.user.id, 'gone', config.limits.goneMarksPerHour)) return res.status(429).json({ error: 'Too many all-gone marks, try later' });
-    db.run('UPDATE posts SET all_gone_at = ?, all_gone_by = ? WHERE id = ?', [nowIso(), req.user.id, p.id]);
-    const post = getPost(p.id, req); broadcast('update', { ...post, mine: false }); res.json({ post });
+    if (p.all_gone_at) return res.json({ post: await getPost(p.id, req) });
+    if (await rateLimited(req.user.id, 'gone', config.limits.goneMarksPerHour)) return res.status(429).json({ error: 'Too many all-gone marks, try later' });
+    await db.run('UPDATE posts SET all_gone_at = ?, all_gone_by = ? WHERE id = ?', [nowIso(), req.user.id, p.id]);
+    const post = await getPost(p.id, req); broadcast('update', { ...post, mine: false }); res.json({ post });
   });
-  app.delete('/api/posts/:id/gone', requireUser, (req, res) => {
-    const p = db.get('SELECT * FROM posts WHERE id = ?', [Number(req.params.id)]);
+  app.delete('/api/posts/:id/gone', requireUser, async (req, res) => {
+    const p = await loadPost(req.params.id);
     if (!p) return res.status(404).json({ error: 'not_found' });
     if (p.user_id !== req.user.id && p.all_gone_by !== req.user.id) return res.status(403).json({ error: 'Only the poster or whoever marked it can undo' });
-    db.run('UPDATE posts SET all_gone_at = NULL, all_gone_by = NULL WHERE id = ?', [p.id]);
-    const post = getPost(p.id, req); broadcast('update', { ...post, mine: false }); res.json({ post });
+    await db.run('UPDATE posts SET all_gone_at = NULL, all_gone_by = NULL WHERE id = ?', [p.id]);
+    const post = await getPost(p.id, req); broadcast('update', { ...post, mine: false }); res.json({ post });
   });
 
   // ---------- Stores & predictions ----------
-  app.get('/api/stores', (req, res) => {
+  // Report times for many stores in ONE query (avoids N round trips to remote Turso).
+  async function seenTimesFor(storeIds) {
+    const map = new Map(storeIds.map(id => [id, []]));
+    for (let i = 0; i < storeIds.length; i += 400) {
+      const chunk = storeIds.slice(i, i + 400);
+      if (!chunk.length) continue;
+      const rows = await db.all(`SELECT store_id, seen_at FROM posts WHERE store_id IN (${chunk.map(() => '?').join(',')})`, chunk);
+      for (const r of rows) map.get(r.store_id).push(r.seen_at);
+    }
+    return map;
+  }
+  app.get('/api/stores', async (req, res) => {
     const lat = Number(req.query.lat), lng = Number(req.query.lng);
     if (!isFinite(lat) || !isFinite(lng)) return res.status(400).json({ error: 'lat,lng required' });
     const radius = Math.min(Number(req.query.radius_km) || 3, 20);
     const at = req.query.at || nowIso();
-    const stores = db.all('SELECT * FROM stores WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?', bbox(lat, lng, radius))
+    const stores = (await db.all('SELECT * FROM stores WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?', bbox(lat, lng, radius)))
       .map(s => ({ ...s, distance_km: Math.round(kmBetween(lat, lng, s.lat, s.lng) * 100) / 100 }))
-      .filter(s => s.distance_km <= radius).sort((a, b) => a.distance_km - b.distance_km).slice(0, 400)
-      .map(s => ({ ...s, prediction: predict.predictStore(db, s, predict.nowDow(s.timezone, at)) }));
-    res.json({ stores });
+      .filter(s => s.distance_km <= radius).sort((a, b) => a.distance_km - b.distance_km).slice(0, 400);
+    const seen = await seenTimesFor(stores.map(s => s.id));
+    res.json({ stores: stores.map(s => ({ ...s, prediction: predict.predictStore(s, predict.nowDow(s.timezone, at), seen.get(s.id), chainRows) })) });
   });
-  app.get('/api/stores/:id/predictions', (req, res) => {
-    const s = db.get('SELECT * FROM stores WHERE id = ?', [Number(req.params.id)]);
+  app.get('/api/stores/:id/predictions', async (req, res) => {
+    const s = await db.get('SELECT * FROM stores WHERE id = ?', [Number(req.params.id)]);
     if (!s) return res.status(404).json({ error: 'not_found' });
-    const week = [1, 2, 3, 4, 5, 6, 0].map(d => predict.predictStore(db, s, d));
+    const seen = (await seenTimesFor([s.id])).get(s.id);
+    const week = [1, 2, 3, 4, 5, 6, 0].map(d => predict.predictStore(s, d, seen, chainRows));
     res.json({ store: s, week, note: 'These are PREDICTIONS, not confirmed reductions.' });
   });
 
@@ -306,6 +336,7 @@ ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
     console.error(err); res.status(500).json({ error: 'server_error' });
   });
   app.locals.db = db;
+  app.locals.photosEnabled = photosEnabled;
   return app;
 }
 module.exports = { createApp, kmBetween };
