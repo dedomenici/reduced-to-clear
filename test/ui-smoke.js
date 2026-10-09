@@ -24,7 +24,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
       class FakeDate extends RealDate { constructor(...a) { if (a.length) super(...a); else super(RealDate.now() + OFF); } static now() { return RealDate.now() + OFF; } }
       window.Date = FakeDate;
     }, opts.fakeNow);
-    if (opts.sound) await page.evaluateOnNewDocument(() => localStorage.setItem('rtc_sound', '1'));
+    if (opts.soundOff) await page.evaluateOnNewDocument(() => { if (!sessionStorage.getItem('rtc_t')) { sessionStorage.setItem('rtc_t', '1'); localStorage.setItem('rtc_sound', '0'); } }); // a user who turned sound off earlier
     if (where) { await ctx.overridePermissions(new URL(BASE).origin, ['geolocation']); await page.setGeolocation(where); }
     await page.setViewport({ width: 1300, height: 850 });
     page.on('pageerror', e => errors.push(e.message));
@@ -99,14 +99,14 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   };
   const alerts = {};
   const beepsOf = pg => pg.evaluate(() => Number(document.body.dataset.beeps || 0));
-  const lp = await open({ latitude: 48.8566, longitude: 2.3522 }, { fakeNow: parisTodayAt(14, 1), sound: true }); // Carrefour FR window 14:00
+  const lp = await open({ latitude: 48.8566, longitude: 2.3522 }, { fakeNow: parisTodayAt(14, 1) }); // Carrefour FR window 14:00
   await lp.waitForSelector('.pred-pin.alerted.alert-flash', { timeout: 15000 });
   alerts.predictionToast = await lp.$eval('#alert-toast', n => n.textContent);
   alerts.predictionPulse = await lp.$eval('.pred-pin.alerted', n => getComputedStyle(n).animationName);
   alerts.predictionBeeps = await beepsOf(lp);
   alerts.loadBeep = await lp.evaluate(() => document.body.dataset.loadBeep);
   if (alerts.loadBeep === 'waiting') { await lp.click('#feed'); alerts.loadBeepAfterTap = await lp.evaluate(() => document.body.dataset.loadBeep); }
-  alerts.loadBeepSoundOff = await watcher.evaluate(() => document.body.dataset.loadBeep);
+  alerts.soundDefaultOn = await watcher.evaluate(() => localStorage.getItem('rtc_sound') === null && /Sound on/.test(document.querySelector('#btn-sound').textContent) && document.body.dataset.loadBeep !== 'off');
   await lp.screenshot({ path: 'test/screenshot-alert-prediction.png' });
   const neighbour = await require('./helpers/poster')(browser, BASE, config.sitePassword, 'Paris Neighbour');
   await sleep(11000); // let the merged load/prediction beep (10 s throttle) play out before measuring
@@ -126,13 +126,15 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   alerts.localPostPulse = await lp.$eval('.pin.alerted', n => getComputedStyle(n).animationName);
   await lp.screenshot({ path: 'test/screenshot-alert-post.png' });
   await neighbour.close();
-  const alertsOk = (alerts.loadBeep === 'played' || alerts.loadBeepAfterTap === 'played') && alerts.loadBeepSoundOff === 'off' && /PREDICTION/.test(alerts.predictionToast) && /Carrefour/.test(alerts.predictionToast) && alerts.predictionPulse === 'rtc-pulse' && alerts.predictionBeeps >= 1
+  const alertsOk = (alerts.loadBeep === 'played' || alerts.loadBeepAfterTap === 'played') && alerts.soundDefaultOn && /PREDICTION/.test(alerts.predictionToast) && /Carrefour/.test(alerts.predictionToast) && alerts.predictionPulse === 'rtc-pulse' && alerts.predictionBeeps >= 1
     && alerts.regionalZoomBeeps === 0 && alerts.regionalZoomFlash === 0 && /Alert Local Bakery/.test(alerts.localPostToast) && alerts.localPostPulse === 'rtc-pulse';
   // No location permission: London fallback only; nothing worldwide or elsewhere until the user moves the map
-  const nowhere = await open(null);
+  const nowhere = await open(null, { soundOff: true });
   await nowhere.waitForFunction(() => /London/.test(document.querySelector('#map-hint').textContent), { timeout: 15000 });
   await sleep(1000);
   world.noLocationHint = await nowhere.$eval('#map-hint', n => !n.hidden && n.textContent);
+  alerts.loadBeepSoundOff = await nowhere.evaluate(() => document.body.dataset.loadBeep);
+  alerts.explicitOffKept = await nowhere.evaluate(() => /Sound off/.test(document.querySelector('#btn-sound').textContent));
   world.firstLoadSummary = await nowhere.$eval('#sheet-summary', n => n.textContent);
   world.firstLoadShowsParis = await nowhere.$eval('#feed', n => n.textContent.includes('Paris test'));
   const apiCalls = () => nowhere.evaluate(() => performance.getEntriesByType('resource').map(e => e.name).filter(u => /\/api\/(posts|stores)\?/.test(u)).map(u => u.replace(location.origin, '')));
@@ -145,11 +147,12 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
     .then(() => nowhere.evaluate(async () => { const r = await fetch('/api/stores?lat=48.8566&lng=2.3522&radius_km=2').then(r => r.json());
       const k = r.stores.find(s => s.name === '京子食品'); return k && window.RTC_NAMES.storeLabel(k.name, k.chain, k.name_en); }));
   await nowhere.screenshot({ path: 'test/screenshot-desktop.png' });
+  const soundPrefOk = alerts.loadBeepSoundOff === 'off' && alerts.explicitOffKept;
   const worldOk = world.mapCentredOnUser && world.genericPredictionPins > 0 && /^ReducedToClear\//.test(world.overpassUserAgent || '') && /OpenStreetMap/.test(world.attribution)
     && /Generic estimate/.test(world.popup) && /France · EUR · Europe\/Paris/.test(world.detected) && /€/.test(world.pricePlaceholder) && world.nearbyOsmStores >= 2
     && world.postShowsCurrency && /London/.test(world.noLocationHint) && /nearby/.test(world.firstLoadSummary) && !world.firstLoadShowsParis
     && world.firstLoadOnlyLondon && world.panLoadsParis && world.kiokoLabel === '京子食品 (Kioko)';
   console.log(JSON.stringify({ liveUpdateReceived: true, newBadgeShown: hasNew, photoUiHiddenWhenDisabled: photoUiHidden, predictionPins: predPins, world, alerts, pageErrors: errors }, null, 1));
   await browser.close(); if (srv) srv.stop(); mock.close();
-  if (!hasNew || !photoUiHidden || !worldOk || !alertsOk || errors.length) process.exit(1);
+  if (!hasNew || !photoUiHidden || !worldOk || !alertsOk || !soundPrefOk || errors.length) process.exit(1);
 })().catch(e => { console.error('UI smoke FAILED:', e.message); process.exit(1); }).finally(() => setTimeout(() => process.exit(), 500).unref());

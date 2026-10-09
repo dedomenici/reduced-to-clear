@@ -75,7 +75,11 @@ const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000
     // Live local alert: another user posts at a store on this phone's map view -> checkout beep + pin highlight.
     // Reduced motion is requested, so the pin must be highlighted without the pulse animation.
     await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
-    await page.tap('#btn-sound'); // sound on (plays a preview beep)
+    results.soundDefaultOn = await page.$eval('#btn-sound', b => b.textContent.includes('🔔')); // new user: sound on by default
+    await page.tap('#btn-sound'); // user turns it off...
+    await page.reload({ waitUntil: 'networkidle2' }); await page.waitForSelector('#feed'); await sleep(1500);
+    results.offChoiceKept = await page.evaluate(() => localStorage.getItem('rtc_sound') === '0' && document.querySelector('#btn-sound').textContent.includes('🔇') && document.body.dataset.loadBeep === 'off');
+    await page.tap('#btn-sound'); // ...and back on (plays a preview beep)
     results.soundOn = await page.evaluate(() => localStorage.getItem('rtc_sound') === '1');
     const beeps0 = await page.evaluate(() => Number(document.body.dataset.beeps || 0));
     const other = await require('./helpers/poster')(browser, srv.base, config.sitePassword, 'Phone Neighbour');
@@ -94,7 +98,7 @@ const PNG = Buffer.from('89504e470d0a1a0a0000000d4948445200000001000000010806000
   const bad = !results.gateShown || !results.manifest.ok || !results.iconsOk || !results.noHorizontalScroll || !results.mapFullWidth || !results.sheetCollapsed
     || !results.fabVisible || results.smallTouchTargets.length || !results.formFullScreen || results.cameraInput.capture !== 'environment'
     || !results.formInputsNoZoom || !results.sheetOpensAfterPost || !results.sheetToggles || results.postHasPhoto !== true || errors.length
-    || !results.soundOn || results.alertPostStatus !== 201 && results.alertPostStatus !== 200 || !/Alert Test Express/.test(results.alert.toast) || !results.alert.toastOnScreen || !results.alert.reducedMotionNoPulse;
+    || !results.soundDefaultOn || !results.offChoiceKept || !results.soundOn || results.alertPostStatus !== 201 && results.alertPostStatus !== 200 || !/Alert Test Express/.test(results.alert.toast) || !results.alert.toastOnScreen || !results.alert.reducedMotionNoPulse;
   if (bad) { console.error('MOBILE SMOKE FAILED'); process.exit(1); }
   console.log('MOBILE SMOKE PASSED');
 })().catch(e => { console.error('MOBILE SMOKE FAILED:', e.message); process.exit(1); });

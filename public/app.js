@@ -14,7 +14,7 @@
     user: null, cfg: null, posts: new Map(), newIds: new Set(),
     center: JSON.parse(localStorage.getItem('rtc_center') || 'null'),
     radius: Number(localStorage.getItem('rtc_radius') || 3),
-    sound: localStorage.getItem('rtc_sound') === '1',
+    sound: localStorage.getItem('rtc_sound') !== '0', // on by default; an explicit 'off' ("0") is kept
     lastVisit: localStorage.getItem('rtc_last_visit') || new Date(0).toISOString(),
     picking: false,
     // The area whose posts/stores are loaded. First load: the user's own area only (saved/current location, else
