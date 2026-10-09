@@ -73,7 +73,7 @@ function createOsm(opts = {}) {
   const cooldown = new Map(); // endpoint -> time before which we don't call it again (after 429/504)
   const BACKOFF_MIN = [1, 3, 10, 30, 60]; // minutes before retrying a failed tile (grows with repeated failures)
   const day = { key: '', n: 0 };
-  const stats = { requests: 0, failures: 0, storesUpserted: 0, lastError: null, lastErrorAt: null };
+  const stats = { requests: 0, failures: 0, storesUpserted: 0, lastError: null, lastErrorAt: null, endpointErrors: {} };
 
   function fresh(st, now) {
     if (!st) return false;
@@ -112,11 +112,11 @@ function createOsm(opts = {}) {
           headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'User-Agent': o.userAgent, Accept: 'application/json' },
         });
         if (res.status === 429 || res.status === 504) { cooldown.set(url, Date.now() + 60e3); throw new Error(`Overpass ${res.status}`); }
-        if (!res.ok) throw new Error(`Overpass ${res.status}`);
+        if (!res.ok) throw new Error(`Overpass ${res.status} ${(await res.text().catch(() => '')).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80)}`);
         const j = await res.json();
         if (!Array.isArray(j.elements)) throw new Error('Overpass: bad response');
         return j.elements;
-      } catch (e) { lastErr = e; stats.lastError = `${new URL(url).host}: ${e.message}`.slice(0, 200); stats.lastErrorAt = new Date().toISOString(); o.log(`Overpass ${url} failed: ${e.message}`); }
+      } catch (e) { lastErr = e; const host = new URL(url).host; stats.lastError = `${host}: ${e.message}`.slice(0, 200); stats.lastErrorAt = new Date().toISOString(); stats.endpointErrors[host] = { error: e.message.slice(0, 120), at: stats.lastErrorAt }; o.log(`Overpass ${url} failed: ${e.message}`); }
     }
     throw lastErr || new Error('no Overpass endpoints');
   }
