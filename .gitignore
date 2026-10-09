@@ -1,0 +1,18 @@
+# secrets / local config
+.env
+.env.*
+!.env.example
+# dependencies
+node_modules/
+# runtime data (DB, generated secret, user uploads)
+data/
+*.sqlite
+*.sqlite.tmp
+uploads/*
+!uploads/.gitkeep
+# test artefacts (keep the mobile screenshot)
+test/*.png
+!test/screenshot-mobile.png
+# misc
+npm-debug.log*
+.DS_Store

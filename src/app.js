@@ -1,0 +1,311 @@
+const express = require('express');
+const cookieParser = require('cookie-parser');
+const multer = require('multer');
+const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
+const path = require('path');
+const fs = require('fs');
+const config = require('./config');
+const { openDb } = require('./db');
+const predict = require('./predict');
+const seeds = require('../seeds/chain-predictions.json');
+
+const CHAINS = ['Tesco', "Sainsbury's", 'Asda', 'Morrisons', 'Co-op', 'M&S', 'Waitrose', 'Lidl', 'Aldi', 'Iceland', 'Other'];
+const nowIso = () => new Date().toISOString();
+
+function kmBetween(a, b, c, d) {
+  const R = 6371, toR = x => x * Math.PI / 180;
+  const dLat = toR(c - a), dLng = toR(d - b);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(toR(a)) * Math.cos(toR(c)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+function bbox(lat, lng, km) {
+  const dLat = km / 111, dLng = km / (111 * Math.cos(lat * Math.PI / 180));
+  return [lat - dLat, lat + dLat, lng - dLng, lng + dLng];
+}
+const clean = (s, max) => String(s ?? '').trim().slice(0, max);
+
+function seedPredictions(db) {
+  db.run('DELETE FROM chain_predictions');
+  for (const w of seeds.windows) {
+    const s = seeds.sources[w.src] || {};
+    db.run(`INSERT INTO chain_predictions (chain,country,days,start_hour,end_hour,label,confidence,source_title,source_url)
+            VALUES (?,?,?,?,?,?,?,?,?)`, [w.chain, w.country, w.days, w.start, w.end, w.label, w.confidence, s.title || null, s.url || null]);
+  }
+}
+
+// First start (empty stores table): import the committed OSM store snapshot so the map isn't empty.
+function seedStores(db, file) {
+  if (!file || !fs.existsSync(file)) return 0;
+  if (db.get('SELECT COUNT(*) AS n FROM stores').n > 0) return 0;
+  const { stores } = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const now = nowIso();
+  for (const s of stores) {
+    db.run(`INSERT OR IGNORE INTO stores (chain,name,address,city,country,timezone,lat,lng,opening_hours,osm_id,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [s.chain, s.name, s.address || null, s.city, s.country, s.timezone, s.lat, s.lng, s.opening_hours || null, s.osm_id || null, now]);
+  }
+  db.flush();
+  return stores.length;
+}
+
+async function createApp(opts = {}) {
+  fs.mkdirSync(config.uploadsDir, { recursive: true });
+  const db = await openDb(opts.dbFile || config.dbFile);
+  seedPredictions(db);
+  const seeded = seedStores(db, opts.seedStoresFile === undefined ? config.seedStoresFile : opts.seedStoresFile);
+  if (seeded) console.log(`Seeded ${seeded} stores from ${path.basename(config.seedStoresFile)} (© OpenStreetMap contributors, ODbL)`);
+  const app = express();
+  app.disable('x-powered-by');
+  app.set('trust proxy', 1); // behind Render/Railway's proxy: correct req.ip and req.secure
+  app.get('/healthz', (req, res) => res.json({ ok: true }));
+  app.use((req, res, next) => { res.set('X-Content-Type-Options', 'nosniff'); next(); });
+  app.use(cookieParser());
+  app.use(express.json({ limit: '100kb' }));
+  app.use(express.urlencoded({ extended: false }));
+
+  // ---------- Site-wide access gate ----------
+  const gateToken = crypto.createHmac('sha256', config.siteSecret).update('gate:' + config.sitePassword).digest('hex');
+  const gateFails = new Map();
+  const gatePage = (err) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#1d1d1b"><link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/favicon-32.png"><link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<title>Reduced to Clear</title><link rel="stylesheet" href="/gate.css"></head><body class="gate">
+<form method="post" action="/gate" class="gate-card"><div class="sticker big">REDUCED<br>TO CLEAR</div>
+<p>This site is private for now. Enter the access password.</p>
+${err ? '<p class="err">Wrong password, try again.</p>' : ''}
+<input type="password" name="password" placeholder="Access password" autofocus required autocomplete="current-password">
+<button type="submit">Enter</button></form></body></html>`;
+  // Public (pre-gate) assets: gate styling + PWA manifest/icons/service worker so "Add to Home Screen" works.
+  const pub = f => path.join(config.ROOT, 'public', f);
+  app.get('/gate.css', (req, res) => res.sendFile(pub('gate.css')));
+  app.get('/manifest.webmanifest', (req, res) => res.type('application/manifest+json').sendFile(pub('manifest.webmanifest')));
+  app.get('/sw.js', (req, res) => res.set('Cache-Control', 'no-cache').type('application/javascript').sendFile(pub('sw.js')));
+  app.use('/icons', express.static(pub('icons'), { maxAge: '7d' }));
+  app.get('/gate', (req, res) => res.type('html').send(gatePage(false)));
+  app.post('/gate', (req, res) => {
+    const ip = req.ip; const f = gateFails.get(ip) || { n: 0, t: Date.now() };
+    if (Date.now() - f.t > 15 * 60e3) { f.n = 0; f.t = Date.now(); }
+    if (f.n >= 20) return res.status(429).type('html').send('Too many attempts. Try again later.');
+    const given = Buffer.from(String(req.body.password || ''));
+    const want = Buffer.from(config.sitePassword);
+    if (given.length === want.length && crypto.timingSafeEqual(given, want)) {
+      gateFails.delete(ip);
+      res.cookie('rtc_gate', gateToken, { httpOnly: true, sameSite: 'lax', secure: req.secure, maxAge: 90 * 864e5 });
+      return res.redirect('/');
+    }
+    f.n++; gateFails.set(ip, f);
+    res.status(401).type('html').send(gatePage(true));
+  });
+  app.use((req, res, next) => {
+    if (req.cookies.rtc_gate === gateToken) return next();
+    if (req.path.startsWith('/api/') || req.path.startsWith('/uploads/')) return res.status(401).json({ error: 'site_locked' });
+    return res.redirect('/gate');
+  });
+
+  // ---------- Static (behind gate) ----------
+  app.use(express.static(path.join(config.ROOT, 'public')));
+  app.use('/uploads', express.static(config.uploadsDir, { maxAge: '7d' }));
+
+  // ---------- Accounts ----------
+  function currentUser(req) {
+    const t = req.cookies.rtc_session; if (!t) return null;
+    return db.get('SELECT u.id, u.email, u.display_name FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?', [t]) || null;
+  }
+  app.use((req, res, next) => { req.user = currentUser(req); next(); });
+  const requireUser = (req, res, next) => req.user ? next() : res.status(401).json({ error: 'login_required' });
+  function startSession(res, userId, req) {
+    const token = crypto.randomBytes(32).toString('hex');
+    db.run('INSERT INTO sessions (token,user_id,created_at) VALUES (?,?,?)', [token, userId, nowIso()]);
+    res.cookie('rtc_session', token, { httpOnly: true, sameSite: 'lax', secure: !!(req && req.secure), maxAge: 180 * 864e5 });
+  }
+  function rateLimited(userId, kind, perHour) {
+    const since = new Date(Date.now() - 3600e3).toISOString();
+    const n = db.get('SELECT COUNT(*) AS n FROM actions WHERE user_id = ? AND kind = ? AND at > ?', [userId, kind, since]).n;
+    if (n >= perHour) return true;
+    db.run('INSERT INTO actions (user_id,kind,at) VALUES (?,?,?)', [userId, kind, nowIso()]);
+    return false;
+  }
+
+  app.post('/api/register', async (req, res) => {
+    if (req.body.website) return res.status(400).json({ error: 'bad_request' }); // honeypot
+    const email = clean(req.body.email, 200).toLowerCase();
+    const name = clean(req.body.displayName, 40);
+    const pw = String(req.body.password || '');
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email' });
+    if (name.length < 2) return res.status(400).json({ error: 'Display name must be at least 2 characters' });
+    if (pw.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    if (db.get('SELECT id FROM users WHERE email = ?', [email])) return res.status(409).json({ error: 'Email already registered' });
+    const hash = await bcrypt.hash(pw, 10);
+    const { id } = db.run('INSERT INTO users (email,display_name,password_hash,created_at) VALUES (?,?,?,?)', [email, name, hash, nowIso()]);
+    startSession(res, id, req);
+    res.json({ user: { id, email, display_name: name } });
+  });
+  app.post('/api/login', async (req, res) => {
+    const u = db.get('SELECT * FROM users WHERE email = ?', [clean(req.body.email, 200).toLowerCase()]);
+    if (!u || !(await bcrypt.compare(String(req.body.password || ''), u.password_hash))) return res.status(401).json({ error: 'Wrong email or password' });
+    startSession(res, u.id, req);
+    res.json({ user: { id: u.id, email: u.email, display_name: u.display_name } });
+  });
+  app.post('/api/logout', (req, res) => {
+    if (req.cookies.rtc_session) db.run('DELETE FROM sessions WHERE token = ?', [req.cookies.rtc_session]);
+    res.clearCookie('rtc_session'); res.json({ ok: true });
+  });
+  app.get('/api/me', (req, res) => res.json({ user: req.user }));
+  app.get('/api/config', (req, res) => res.json({ countries: config.countries, chains: CHAINS }));
+
+  // ---------- Live updates (SSE) ----------
+  const clients = new Set();
+  app.get('/api/stream', (req, res) => {
+    res.set({ 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+    res.flushHeaders(); res.write('retry: 5000\n\n');
+    clients.add(res);
+    const ping = setInterval(() => res.write(': ping\n\n'), 25000);
+    req.on('close', () => { clearInterval(ping); clients.delete(res); });
+  });
+  function broadcast(event, data) {
+    const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+    for (const c of clients) c.write(msg);
+  }
+
+  // ---------- Posts ----------
+  const POST_SELECT = `SELECT p.*, s.chain, s.name AS store_name, s.address AS store_address, s.timezone,
+      u.display_name AS author, g.display_name AS gone_by_name
+    FROM posts p JOIN stores s ON s.id = p.store_id JOIN users u ON u.id = p.user_id LEFT JOIN users g ON g.id = p.all_gone_by`;
+  function shapePost(p, req, lat, lng) {
+    const out = { ...p, mine: !!(req.user && req.user.id === p.user_id), photo_url: p.photo ? '/uploads/' + p.photo : null };
+    delete out.photo;
+    if (lat != null) out.distance_km = Math.round(kmBetween(lat, lng, p.lat, p.lng) * 100) / 100;
+    return out;
+  }
+  const getPost = (id, req) => { const p = db.get(POST_SELECT + ' WHERE p.id = ?', [id]); return p && shapePost(p, req); };
+
+  app.get('/api/posts', (req, res) => {
+    const lat = req.query.lat != null ? Number(req.query.lat) : null, lng = req.query.lng != null ? Number(req.query.lng) : null;
+    const radius = Math.min(Number(req.query.radius_km) || 3, 50);
+    const where = [], params = [];
+    if (lat != null && lng != null && isFinite(lat) && isFinite(lng)) {
+      const [a, b, c, d] = bbox(lat, lng, radius);
+      where.push('p.lat BETWEEN ? AND ? AND p.lng BETWEEN ? AND ?'); params.push(a, b, c, d);
+    }
+    if (req.query.include_gone !== '1') where.push('p.all_gone_at IS NULL');
+    const hours = Math.min(Number(req.query.hours) || 48, 24 * 30);
+    where.push('p.created_at > ?'); params.push(new Date(Date.now() - hours * 3600e3).toISOString());
+    let rows = db.all(POST_SELECT + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY p.created_at DESC LIMIT 300', params)
+      .map(p => shapePost(p, req, lat, lng));
+    if (lat != null) rows = rows.filter(p => p.distance_km <= radius);
+    res.json({ posts: rows });
+  });
+
+  const upload = multer({
+    storage: multer.diskStorage({
+      destination: config.uploadsDir,
+      filename: (req, file, cb) => cb(null, crypto.randomBytes(12).toString('hex') + ({ 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' }[file.mimetype] || '')),
+    }),
+    limits: { fileSize: config.limits.maxPhotoBytes, files: 1 },
+    fileFilter: (req, file, cb) => cb(null, ['image/jpeg', 'image/png', 'image/webp'].includes(file.mimetype)),
+  });
+
+  function findOrCreateStore(body, userId) {
+    if (body.store_id) {
+      const s = db.get('SELECT * FROM stores WHERE id = ?', [Number(body.store_id)]);
+      if (s) return s;
+    }
+    const chain = CHAINS.includes(body.chain) ? body.chain : 'Other';
+    const chainName = chain === 'Other' ? clean(body.chain_other, 60) || 'Other' : chain;
+    const lat = Number(body.lat), lng = Number(body.lng);
+    const near = db.all('SELECT * FROM stores WHERE chain = ? AND lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?', [chainName, ...bbox(lat, lng, 0.15)])
+      .filter(s => kmBetween(lat, lng, s.lat, s.lng) <= 0.15);
+    if (near.length) return near[0];
+    const country = config.countries[body.country] ? body.country : 'GB';
+    const city = clean(body.city, 60) || 'London';
+    const tz = config.countries[country].cities[city]?.timezone || config.countries[country].timezone;
+    const name = clean(body.store_name, 80) || `${chainName} (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
+    const { id } = db.run(`INSERT INTO stores (chain,name,address,city,country,timezone,lat,lng,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [chainName, name, clean(body.address, 160) || null, city, country, tz, lat, lng, userId, nowIso()]);
+    return db.get('SELECT * FROM stores WHERE id = ?', [id]);
+  }
+
+  app.post('/api/posts', requireUser, upload.single('photo'), (req, res) => {
+    const b = req.body;
+    const fail = (code, error) => { if (req.file) fs.unlink(req.file.path, () => {}); res.status(code).json({ error }); };
+    const items = clean(b.items, 1000);
+    const lat = Number(b.lat), lng = Number(b.lng);
+    if (!items) return fail(400, 'Say what items are reduced');
+    if (!b.store_id && !(b.chain)) return fail(400, 'Choose the supermarket');
+    if (!b.store_id && !(isFinite(lat) && isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180)) return fail(400, 'Set the location');
+    let seenAt = b.seen_at ? new Date(b.seen_at) : new Date();
+    if (isNaN(seenAt)) return fail(400, 'Invalid time');
+    if (seenAt > new Date(Date.now() + 5 * 60e3)) return fail(400, 'Time cannot be in the future');
+    if (seenAt < new Date(Date.now() - 24 * 3600e3)) return fail(400, 'Only post reductions seen in the last 24 hours');
+    if (rateLimited(req.user.id, 'post', config.limits.postsPerHour)) return fail(429, 'Posting limit reached, try again later');
+    const store = findOrCreateStore(b, req.user.id);
+    const currency = config.countries[store.country]?.currency || 'GBP';
+    const { id } = db.run(`INSERT INTO posts (user_id,store_id,items,price_note,photo,seen_at,created_at,lat,lng,city,country,currency)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`, [req.user.id, store.id, items, clean(b.price_note, 200) || null, req.file ? req.file.filename : null,
+      seenAt.toISOString(), nowIso(), store.lat, store.lng, store.city, store.country, currency]);
+    const post = getPost(id, req);
+    broadcast('post', { ...post, mine: false });
+    res.status(201).json({ post });
+  });
+
+  app.patch('/api/posts/:id', requireUser, (req, res) => {
+    const p = db.get('SELECT * FROM posts WHERE id = ?', [Number(req.params.id)]);
+    if (!p) return res.status(404).json({ error: 'not_found' });
+    if (p.user_id !== req.user.id) return res.status(403).json({ error: 'You can only edit your own posts' });
+    const items = req.body.items != null ? clean(req.body.items, 1000) : p.items;
+    if (!items) return res.status(400).json({ error: 'Items cannot be empty' });
+    const priceNote = req.body.price_note != null ? (clean(req.body.price_note, 200) || null) : p.price_note;
+    db.run('UPDATE posts SET items = ?, price_note = ?, updated_at = ? WHERE id = ?', [items, priceNote, nowIso(), p.id]);
+    const post = getPost(p.id, req); broadcast('update', { ...post, mine: false }); res.json({ post });
+  });
+  app.delete('/api/posts/:id', requireUser, (req, res) => {
+    const p = db.get('SELECT * FROM posts WHERE id = ?', [Number(req.params.id)]);
+    if (!p) return res.status(404).json({ error: 'not_found' });
+    if (p.user_id !== req.user.id) return res.status(403).json({ error: 'You can only delete your own posts' });
+    db.run('DELETE FROM posts WHERE id = ?', [p.id]);
+    if (p.photo) fs.unlink(path.join(config.uploadsDir, p.photo), () => {});
+    broadcast('delete', { id: p.id }); res.json({ ok: true });
+  });
+  app.post('/api/posts/:id/gone', requireUser, (req, res) => {
+    const p = db.get('SELECT * FROM posts WHERE id = ?', [Number(req.params.id)]);
+    if (!p) return res.status(404).json({ error: 'not_found' });
+    if (p.all_gone_at) return res.json({ post: getPost(p.id, req) });
+    if (rateLimited(req.user.id, 'gone', config.limits.goneMarksPerHour)) return res.status(429).json({ error: 'Too many all-gone marks, try later' });
+    db.run('UPDATE posts SET all_gone_at = ?, all_gone_by = ? WHERE id = ?', [nowIso(), req.user.id, p.id]);
+    const post = getPost(p.id, req); broadcast('update', { ...post, mine: false }); res.json({ post });
+  });
+  app.delete('/api/posts/:id/gone', requireUser, (req, res) => {
+    const p = db.get('SELECT * FROM posts WHERE id = ?', [Number(req.params.id)]);
+    if (!p) return res.status(404).json({ error: 'not_found' });
+    if (p.user_id !== req.user.id && p.all_gone_by !== req.user.id) return res.status(403).json({ error: 'Only the poster or whoever marked it can undo' });
+    db.run('UPDATE posts SET all_gone_at = NULL, all_gone_by = NULL WHERE id = ?', [p.id]);
+    const post = getPost(p.id, req); broadcast('update', { ...post, mine: false }); res.json({ post });
+  });
+
+  // ---------- Stores & predictions ----------
+  app.get('/api/stores', (req, res) => {
+    const lat = Number(req.query.lat), lng = Number(req.query.lng);
+    if (!isFinite(lat) || !isFinite(lng)) return res.status(400).json({ error: 'lat,lng required' });
+    const radius = Math.min(Number(req.query.radius_km) || 3, 20);
+    const at = req.query.at || nowIso();
+    const stores = db.all('SELECT * FROM stores WHERE lat BETWEEN ? AND ? AND lng BETWEEN ? AND ?', bbox(lat, lng, radius))
+      .map(s => ({ ...s, distance_km: Math.round(kmBetween(lat, lng, s.lat, s.lng) * 100) / 100 }))
+      .filter(s => s.distance_km <= radius).sort((a, b) => a.distance_km - b.distance_km).slice(0, 400)
+      .map(s => ({ ...s, prediction: predict.predictStore(db, s, predict.nowDow(s.timezone, at)) }));
+    res.json({ stores });
+  });
+  app.get('/api/stores/:id/predictions', (req, res) => {
+    const s = db.get('SELECT * FROM stores WHERE id = ?', [Number(req.params.id)]);
+    if (!s) return res.status(404).json({ error: 'not_found' });
+    const week = [1, 2, 3, 4, 5, 6, 0].map(d => predict.predictStore(db, s, d));
+    res.json({ store: s, week, note: 'These are PREDICTIONS, not confirmed reductions.' });
+  });
+
+  app.use((err, req, res, next) => {
+    if (err instanceof multer.MulterError) return res.status(400).json({ error: err.code === 'LIMIT_FILE_SIZE' ? 'Photo too large (max 5MB)' : err.message });
+    console.error(err); res.status(500).json({ error: 'server_error' });
+  });
+  app.locals.db = db;
+  return app;
+}
+module.exports = { createApp, kmBetween };

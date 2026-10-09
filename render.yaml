@@ -1,0 +1,34 @@
+# Render Blueprint for Reduced to Clear — https://render.com/docs/blueprint-spec
+# Deploy: Render Dashboard → New → Blueprint → pick this repo. You will be prompted for SITE_PASSWORD.
+#
+# PERSISTENCE TRADE-OFF:
+#  - This blueprint uses a paid plan (0.5c-512mb) + a 1 GB persistent disk at /var/data, so the SQLite DB,
+#    uploaded photos and user accounts survive restarts and redeploys. (Disks disable zero-downtime deploys
+#    and prevent scaling beyond 1 instance — fine for this app.)
+#  - Render's FREE web services cannot attach disks. To try it for free: change `plan: free`, delete the
+#    `disk:` block and the DATA_DIR env var. The app still works (stores re-seed from seeds/stores-london.json
+#    on every start) but ALL posts, accounts and photos are wiped whenever the service restarts, redeploys or
+#    spins down after inactivity. Use free only for demos.
+services:
+  - type: web
+    name: reduced-to-clear
+    runtime: node
+    region: frankfurt          # closest Render region to London
+    plan: 0.5c-512mb           # paid plan required for a persistent disk
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: SITE_PASSWORD     # site-wide access password — entered in the Render dashboard, never committed
+        sync: false
+      - key: SITE_SECRET       # signs the gate cookie; generated once by Render
+        generateValue: true
+      - key: DATA_DIR          # SQLite DB + uploads + secret live on the persistent disk
+        value: /var/data
+    disk:
+      name: rtc-data
+      mountPath: /var/data
+      sizeGB: 1

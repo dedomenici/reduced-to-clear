@@ -1,0 +1,31 @@
+{
+  "name": "reduced-to-clear",
+  "version": "1.0.0",
+  "description": "Crowdsourced map of reduced-to-clear (yellow sticker) supermarket items",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/api.test.js",
+    "import-osm": "node scripts/import-osm.js",
+    "test:ui": "node test/ui-smoke.js",
+    "test:mobile": "node test/mobile-smoke.js",
+    "export-stores": "node scripts/export-stores.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "express": "^5.3.0",
+    "multer": "^2.4.0",
+    "sql.js": "^1.14.2"
+  },
+  "private": true,
+  "devDependencies": {
+    "puppeteer-core": "^25.13.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

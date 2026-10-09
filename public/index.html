@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1d1d1b">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Reduced">
+<title>Reduced to Clear</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/favicon-32.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<link rel="stylesheet" href="/gate.css">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <div class="brand"><span class="sticker">REDUCED TO CLEAR</span></div>
+  <div class="loc">
+    <button id="btn-locate" title="Use my location" aria-label="Use my location">📍<span class="lbl"> Near me</span></button>
+    <form id="place-form" role="search"><input id="place" type="search" enterkeyhint="search" placeholder="Postcode or place…" aria-label="Postcode or place"><button aria-label="Search">Go</button></form>
+    <select id="radius" aria-label="Radius"><option value="1">1 km</option><option value="3" selected>3 km</option><option value="10">10 km</option><option value="25">25 km</option></select>
+  </div>
+  <div class="acct">
+    <button id="btn-sound" title="Ping on new posts" aria-label="Toggle ping sound">🔇<span class="lbl"> Sound off</span></button>
+    <span id="who"></span>
+    <button id="btn-login">Log in<span class="lbl"> / Register</span></button>
+    <button id="btn-logout" hidden>Log out</button>
+  </div>
+</header>
+<main>
+  <div id="map"></div>
+  <button id="fab-post" class="fab" aria-label="Post reductions">＋</button>
+  <aside id="sheet" class="sheet" aria-label="Reductions feed">
+    <button id="sheet-handle" class="sheet-handle" aria-expanded="false" aria-controls="sheet-body">
+      <span class="grip"></span><span id="sheet-summary">Reductions nearby</span><span class="chev">▲</span>
+    </button>
+    <div id="sheet-body" class="sheet-body">
+      <div class="aside-head">
+        <button id="btn-new" class="primary">+ Post reductions</button>
+        <label class="chk"><input type="checkbox" id="show-gone"> show "all gone"</label>
+        <label class="chk"><input type="checkbox" id="show-pred" checked> show predictions</label>
+      </div>
+      <div id="live-status" class="muted small"></div>
+      <ol id="feed"></ol>
+      <p class="muted small">Posts are community reports; check in store. <span class="pred-label">PREDICTION</span> pins (dashed purple) are estimates, not confirmed reductions.
+      Map © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap contributors</a>.</p>
+    </div>
+  </aside>
+</main>
+
+<dialog id="dlg-auth">
+  <form id="auth-form" method="dialog">
+    <h2 id="auth-title">Log in</h2>
+    <p class="muted small">You need an account to post, edit your posts, or mark items all gone. This keeps the map honest.</p>
+    <label class="reg-only">Display name <input name="displayName" maxlength="40" autocomplete="nickname"></label>
+    <label>Email <input name="email" type="email" required autocomplete="email" inputmode="email" autocapitalize="off"></label>
+    <label>Password <input name="password" type="password" required minlength="8" autocomplete="current-password"></label>
+    <input name="website" class="hp" tabindex="-1" autocomplete="off" aria-hidden="true">
+    <p class="err" id="auth-err"></p>
+    <div class="row"><button type="submit" class="primary" id="auth-submit">Log in</button><button type="button" id="auth-cancel">Cancel</button></div>
+    <p class="small"><a href="#" id="auth-toggle">No account? Register</a></p>
+  </form>
+</dialog>
+
+<dialog id="dlg-post">
+  <form id="post-form">
+    <div class="dlg-top"><h2>Post reductions</h2><button type="button" class="x" id="post-x" aria-label="Close">✕</button></div>
+    <label>Nearby store (optional) <select name="store_id" id="store-select"><option value="">— new / not listed —</option></select></label>
+    <div id="new-store-fields">
+      <label>Supermarket <select name="chain" id="chain-select"></select></label>
+      <label id="chain-other-wrap" hidden>Supermarket name <input name="chain_other" maxlength="60"></label>
+      <label>Branch name <input name="store_name" placeholder="e.g. Tesco Express Old Street" maxlength="80" autocapitalize="words"></label>
+      <label>Address (optional) <input name="address" maxlength="160" autocomplete="street-address"></label>
+    </div>
+    <label>What's reduced? <textarea name="items" required maxlength="1000" rows="3" enterkeyhint="next" placeholder="e.g. sushi packs 75% off, sourdough loaves 20p, lots of salads"></textarea></label>
+    <label>Prices / notes (optional) <input name="price_note" maxlength="200" placeholder="e.g. most items £0.50–£1"></label>
+    <label>Time seen <input type="datetime-local" name="seen_local" required></label>
+    <fieldset><legend>Location</legend>
+      <div class="row"><button type="button" id="loc-here">📍 Use my location</button><button type="button" id="loc-pick">🗺 Pick on map</button></div>
+      <p class="small" id="loc-text">Not set</p>
+      <input type="hidden" name="lat"><input type="hidden" name="lng">
+      <div class="row small"><label>Country <select name="country" id="country-select"></select></label><label>City <select name="city" id="city-select"></select></label></div>
+    </fieldset>
+    <fieldset><legend>Photo (optional)</legend>
+      <div class="row">
+        <label class="filebtn">📷 Take photo<input type="file" id="photo-camera" accept="image/*" capture="environment"></label>
+        <label class="filebtn">🖼 Choose photo<input type="file" id="photo-gallery" accept="image/*"></label>
+      </div>
+      <div id="photo-preview" class="small muted">No photo</div>
+    </fieldset>
+    <p class="err" id="post-err"></p>
+    <div class="row sticky-actions"><button type="submit" class="primary">Post</button><button type="button" id="post-cancel">Cancel</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-pred"><div id="pred-body"></div><button id="pred-close">Close</button></dialog>
+<div id="pick-banner" class="pick-banner" hidden>Tap the map to set the store location <button id="pick-cancel">Cancel</button></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script src="/app.js"></script>
+</body>
+</html>
