@@ -260,7 +260,7 @@
   }
   setInterval(checkPredictions, 30000);
   map.on('moveend', checkPredictions);
-  // (a) a new community post: beep + flash if the store is on the local map view; otherwise the old two-note ping.
+  // (a) a new community post: beep + flash if the store is in view at city zoom or closer; otherwise the old two-note ping.
   function onNewPost(p) {
     if (st.posts.has(p.id) || !inRadius(p)) return;
     let alert = null;

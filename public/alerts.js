@@ -1,20 +1,21 @@
 /* Reduced to Clear – local "reductions starting" alerts: checkout beep + flashing pin.
    Pure logic (no DOM/Leaflet) so it is unit-tested in Node; the browser glue lives in app.js.
    Triggers: a new community post at a store, or a store's predicted window starting now (labelled as a prediction).
-   Only for stores inside the visible map bounds at local zoom. One beep per 10 s at most (bursts merge into one);
+   Only for stores inside the visible map bounds at city zoom or closer. One beep per 10 s at most (bursts merge into one);
    each store fires at most once per window. */
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) module.exports = factory();
   else root.RTC_ALERTS = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
-  const LOCAL_ZOOM = 13, LOCAL_MAX_KM = 10;       // never at city/national zoom
+  const LOCAL_ZOOM = 10, LOCAL_MAX_KM = 60;       // street to city level; never regional/national zoom
+  const MAX_PULSING = 8;                          // cities have many stores: at most 8 pins pulse at once, the rest just highlight
   const BEEP_GAP_MS = 10000;                      // max one beep per 10 s
   const FLASH_MS = 60000;                         // pulse ~60 s, then a steady highlight
   const START_GRACE_H = 10 / 60;                  // "starting now" = within 10 min of the window's start
   const POST_WINDOW_MS = 60 * 60000;              // a store re-alerts for posts at most once an hour
   const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
-  // Local level: zoom >= 13, or the visible area is under ~10 km across (whichever is true).
+  // City level or closer: zoom >= 10, or the visible area is under ~60 km across (whichever is true).
   function isLocalView(zoom, widthKm) { return zoom >= LOCAL_ZOOM || (Number.isFinite(widthKm) && widthKm < LOCAL_MAX_KM); }
   function inBounds(b, lat, lng) { // b = { s, w, n, e }; handles the antimeridian (w > e)
     if (!(lat >= b.s && lat <= b.n)) return false;
@@ -68,7 +69,9 @@
     const gc = t => { for (const [k, exp] of fired) if (exp < t) fired.delete(k); };
     function once(key, ttlMs) { const t = now(); gc(t); if (fired.has(key)) return false; fired.set(key, t + ttlMs); return true; }
     function mark(storeId, kind, label, holdMs) {
-      const t = now(); flashing.set(storeId, { since: t, until: t + Math.max(holdMs, FLASH_MS), kind, label });
+      const t = now();
+      let pulsing = 0; for (const [id, f] of flashing) if (id !== storeId && f.pulse && t - f.since < FLASH_MS && t <= f.until) pulsing++;
+      flashing.set(storeId, { since: t, until: t + Math.max(holdMs, FLASH_MS), kind, label, pulse: pulsing < MAX_PULSING });
     }
     return {
       // view = { zoom, widthKm, bounds }; returns an alert object or null
@@ -93,11 +96,11 @@
         const f = flashing.get(storeId); if (!f) return null;
         const t = now(); if (t > f.until) { flashing.delete(storeId); return null; }
         const elapsed = t - f.since;
-        return elapsed < FLASH_MS ? { mode: 'flash', elapsedS: elapsed / 1000, kind: f.kind } : { mode: 'steady', kind: f.kind };
+        return elapsed < FLASH_MS && f.pulse ? { mode: 'flash', elapsedS: elapsed / 1000, kind: f.kind } : { mode: 'steady', kind: f.kind };
       },
     };
   }
 
   return { isLocalView, inBounds, localClock, timedWindows, windowStartingNow, createBeeper, createAlerter, DOW,
-    LOCAL_ZOOM, LOCAL_MAX_KM, BEEP_GAP_MS, FLASH_MS };
+    LOCAL_ZOOM, LOCAL_MAX_KM, MAX_PULSING, BEEP_GAP_MS, FLASH_MS };
 });

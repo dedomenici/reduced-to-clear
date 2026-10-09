@@ -6,9 +6,9 @@ const A = require('../public/alerts');
 const PARIS_VIEW = { zoom: 15, widthKm: 2.5, bounds: { s: 48.84, n: 48.87, w: 2.33, e: 2.37 } };
 const at = iso => new Date(iso);
 
-test('local view only: zoom >= 13 or under ~10 km across; never city/national zoom', () => {
-  assert.ok(A.isLocalView(13, 30)); assert.ok(A.isLocalView(16, 1)); assert.ok(A.isLocalView(12, 8));
-  assert.ok(!A.isLocalView(12, 15)); assert.ok(!A.isLocalView(10, 80)); assert.ok(!A.isLocalView(5, 2000));
+test('alert zoom: city level or closer (zoom >= 10 or under ~60 km across); never regional/national', () => {
+  assert.ok(A.isLocalView(16, 1)); assert.ok(A.isLocalView(13, 30)); assert.ok(A.isLocalView(10, 80)); assert.ok(A.isLocalView(9, 50));
+  assert.ok(!A.isLocalView(9, 120)); assert.ok(!A.isLocalView(7, 600)); assert.ok(!A.isLocalView(5, 2000));
   assert.ok(A.inBounds(PARIS_VIEW.bounds, 48.85, 2.35)); assert.ok(!A.inBounds(PARIS_VIEW.bounds, 48.85, 2.40));
   assert.ok(A.inBounds({ s: -20, n: -10, w: 175, e: -175 }, -15, 179), 'antimeridian'); assert.ok(A.inBounds({ s: -20, n: -10, w: 175, e: -175 }, -15, -178));
 });
@@ -45,7 +45,7 @@ test('alerter: posts and predictions fire once per store per window, only in vie
   let clock = Date.parse('2026-10-09T12:01:00Z'); // 14:01 in Paris
   const al = A.createAlerter({ now: () => clock });
   const post = { id: 1, store_id: 7, store_name: 'Monoprix', lat: 48.855, lng: 2.35 };
-  assert.strictEqual(al.post(post, { ...PARIS_VIEW, zoom: 11, widthKm: 40 }), null, 'city zoom: no alert');
+  assert.strictEqual(al.post(post, { ...PARIS_VIEW, zoom: 8, widthKm: 250 }), null, 'regional zoom: no alert');
   assert.strictEqual(al.post({ ...post, lng: 2.45 }, PARIS_VIEW), null, 'off screen: no alert');
   assert.deepStrictEqual(al.post(post, PARIS_VIEW), { storeId: 7, kind: 'post', name: 'Monoprix' });
   assert.strictEqual(al.post({ ...post, id: 2 }, PARIS_VIEW), null, 'same store again within the window');
@@ -65,4 +65,23 @@ test('alerter: posts and predictions fire once per store per window, only in vie
   const other = { ...store, id: 10 };
   clock = Date.parse('2026-10-09T12:02:00Z');
   assert.strictEqual(al.prediction(other, { ...PARIS_VIEW, zoom: 6, widthKm: 900 }), null, 'national zoom');
+});
+
+test('city zoom with many stores: alerts fire, but at most 8 pins pulse at once (the rest just highlight)', () => {
+  let clock = Date.parse('2026-10-09T12:01:00Z');
+  const al = A.createAlerter({ now: () => clock });
+  const city = { zoom: 11, widthKm: 45, bounds: { s: 48.7, n: 49.0, w: 2.1, e: 2.6 } };
+  const fired = [];
+  for (let i = 0; i < 12; i++) fired.push(al.post({ id: i, store_id: 100 + i, store_name: 'S' + i, lat: 48.8 + i * 0.01, lng: 2.3 }, city));
+  assert.strictEqual(fired.filter(Boolean).length, 12, 'every store in view alerts (beeps are throttled separately)');
+  const modes = fired.map(a => al.state(a.storeId).mode);
+  assert.strictEqual(modes.filter(m => m === 'flash').length, A.MAX_PULSING);
+  assert.deepStrictEqual(modes.slice(A.MAX_PULSING), Array(12 - A.MAX_PULSING).fill('steady'));
+  clock += 61000; // first pulses have finished: a new alert may pulse again
+  assert.strictEqual(al.post({ id: 99, store_id: 199, store_name: 'Late', lat: 48.85, lng: 2.35 }, city) && al.state(199).mode, 'flash');
+  // and many triggers in one burst still make a single beep (merged by the throttle)
+  let t = 0; const plays = []; const timers = [];
+  const b = A.createBeeper({ play: n => plays.push(n), now: () => t, setTimer: (fn, ms) => timers.push(fn) });
+  for (let i = 0; i < 12; i++) b.trigger();
+  assert.deepStrictEqual(plays, [1]); t = 10000; timers.shift()(); assert.deepStrictEqual(plays, [1, 11]);
 });

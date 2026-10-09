@@ -106,14 +106,14 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   alerts.predictionBeeps = await beepsOf(lp);
   await lp.screenshot({ path: 'test/screenshot-alert-prediction.png' });
   const neighbour = await require('./helpers/poster')(browser, BASE, config.sitePassword, 'Paris Neighbour');
-  for (let i = 0; i < 4; i++) { await lp.click('.leaflet-control-zoom-out'); await sleep(400); } // zoom 11: city level
+  for (let i = 0; i < 6; i++) { await lp.click('.leaflet-control-zoom-out'); await sleep(400); } // zoom 9: regional level
   let b0 = await beepsOf(lp);
-  await neighbour.post(48.8580, 2.3545, 'Alert City Zoom');
-  await lp.waitForFunction(() => document.querySelector('#feed').textContent.includes('Alert City Zoom'), { timeout: 8000 });
+  await neighbour.post(48.8580, 2.3545, 'Alert Regional Zoom');
+  await lp.waitForFunction(() => document.querySelector('#feed').textContent.includes('Alert Regional Zoom'), { timeout: 8000 });
   await sleep(11000); // longer than the beep throttle, so a (wrong) merged beep would have played by now
-  alerts.cityZoomBeeps = (await beepsOf(lp)) - b0;
-  alerts.cityZoomFlash = await lp.evaluate(() => document.querySelectorAll('.pin.alerted').length);
-  for (let i = 0; i < 4; i++) { await lp.click('.leaflet-control-zoom-in'); await sleep(400); }
+  alerts.regionalZoomBeeps = (await beepsOf(lp)) - b0;
+  alerts.regionalZoomFlash = await lp.evaluate(() => document.querySelectorAll('.pin.alerted').length);
+  for (let i = 0; i < 2; i++) { await lp.click('.leaflet-control-zoom-in'); await sleep(400); } // zoom 11: city level now alerts
   b0 = await beepsOf(lp);
   await neighbour.post(48.8570, 2.3528, 'Alert Local Bakery');
   await lp.waitForSelector('.pin.alerted.alert-flash', { timeout: 8000 });
@@ -123,7 +123,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   await lp.screenshot({ path: 'test/screenshot-alert-post.png' });
   await neighbour.close();
   const alertsOk = /PREDICTION/.test(alerts.predictionToast) && /Carrefour/.test(alerts.predictionToast) && alerts.predictionPulse === 'rtc-pulse' && alerts.predictionBeeps >= 1
-    && alerts.cityZoomBeeps === 0 && alerts.cityZoomFlash === 0 && /Alert Local Bakery/.test(alerts.localPostToast) && alerts.localPostPulse === 'rtc-pulse';
+    && alerts.regionalZoomBeeps === 0 && alerts.regionalZoomFlash === 0 && /Alert Local Bakery/.test(alerts.localPostToast) && alerts.localPostPulse === 'rtc-pulse';
   // No location permission: world view, hint, worldwide feed
   const nowhere = await open(null);
   await sleep(1500);
