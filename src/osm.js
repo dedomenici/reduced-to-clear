@@ -116,7 +116,7 @@ function createOsm(opts = {}) {
         const j = await res.json();
         if (!Array.isArray(j.elements)) throw new Error('Overpass: bad response');
         return j.elements;
-      } catch (e) { lastErr = e; const host = new URL(url).host; stats.lastError = `${host}: ${e.message}`.slice(0, 200); stats.lastErrorAt = new Date().toISOString(); stats.endpointErrors[host] = { error: e.message.slice(0, 120), at: stats.lastErrorAt }; o.log(`Overpass ${url} failed: ${e.message}`); }
+      } catch (e) { lastErr = e; const host = new URL(url).host; stats.lastError = `${host}: ${e.message}`.slice(0, 200); stats.lastErrorAt = new Date().toISOString(); stats.endpointErrors[host] = { error: (e.message + (e.cause ? ` (${e.cause.code || ''} ${e.cause.message || ''})` : '')).slice(0, 200), at: stats.lastErrorAt }; o.log(`Overpass ${url} failed: ${e.message}`); }
     }
     throw lastErr || new Error('no Overpass endpoints');
   }
