@@ -542,3 +542,12 @@ test('see all branches: indexed chain lookup, capped, gated; markercluster self-
   for (const n of ['London', 'Paris', 'Berlin', 'Madrid', 'Amsterdam', 'New York', 'Toronto', 'Tokyo', 'Osaka', 'Seoul', 'Taipei', 'Kaohsiung', 'Hong Kong', 'Singapore', 'Shanghai', 'Beijing', 'Bangkok', 'Sydney', 'Melbourne', 'Dublin', 'Mexico City', 'São Paulo', 'Mumbai', 'Istanbul', 'Dubai', 'Lagos', 'Johannesburg'])
     assert.ok(C.CITIES.some(c => c.name === n && Math.abs(c.lat) <= 90 && Math.abs(c.lng) <= 180), n);
 });
+
+test('social share preview: OG/Twitter tags on gate and app pages; og-image.png public', async () => {
+  const r = await req('anon-og', 'GET', '/og-image.png');
+  assert.strictEqual(r.status, 200); assert.match(r.headers.get('content-type'), /^image\/png/);
+  for (const html of [(await req('anon-og', 'GET', '/gate')).data, (await (async () => { await gate('og'); return (await req('og', 'GET', '/')).data; })())]) {
+    assert.match(html, /<meta property="og:image" content="https:\/\/reduced-to-clear\.onrender\.com\/og-image\.png">/);
+    assert.match(html, /<meta name="twitter:card" content="summary_large_image">/); assert.match(html, /og:title" content="Reduced to Clear"/);
+  }
+});
