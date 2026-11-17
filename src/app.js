@@ -92,7 +92,7 @@ async function createApp(opts = {}) {
 <p>This site is private for now. Enter the access password.</p>
 ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
 <input type="password" name="password" placeholder="Access password" autofocus required autocomplete="current-password">
-<button type="submit">Enter</button></form></body></html>`;
+<button type="submit">Enter</button></form><script data-goatcounter="https://dedomenici.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script></body></html>`;
   // Public (pre-gate) assets: gate styling + PWA manifest/icons/service worker so "Add to Home Screen" works.
   const pub = f => path.join(config.ROOT, 'public', f);
   app.get('/gate.css', (req, res) => res.sendFile(pub('gate.css')));
