@@ -443,13 +443,15 @@
   $('#btn-locate').onclick = () => locate(false);
   $('#place-form').onsubmit = async e => {
     e.preventDefault(); const q = $('#place').value.trim(); if (!q) return;
+    const trackSearch = (ok) => { if (typeof window.__gcTrack === 'function') window.__gcTrack(ok ? 'search-results' : 'search-no-results', ok ? 'Search with results' : 'Search with no results'); };
     try {
       const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=1&q=' + encodeURIComponent(q)).then(r => r.json());
-      if (!r.length) return alert(t('placeNotFound'));
+      if (!r.length) { trackSearch(false); return alert(t('placeNotFound')); }
+      trackSearch(true);
       const lat = Number(r[0].lat), lng = Number(r[0].lon);
       if (!st.intl && home() && !AREA.isLocal(home(), { lat, lng })) { progView(lat, lng, 14); showHint(t('intlHint')); return; } // show it, don't fetch
       setCenter(lat, lng, 15);
-    } catch { alert(t('searchFailed')); }
+    } catch { trackSearch(false); alert(t('searchFailed')); }
   };
   $('#radius').value = String(st.radius);
   // Radius change: fit the map to that radius around the user (or the area centre), reload, then pulse the stores in it

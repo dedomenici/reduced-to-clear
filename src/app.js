@@ -92,7 +92,7 @@ async function createApp(opts = {}) {
 <p>This site is private for now. Enter the access password.</p>
 ${err ? '<p class="err">Wrong password, try again.</p>' : ''}
 <input type="password" name="password" placeholder="Access password" autofocus required autocomplete="current-password">
-<button type="submit">Enter</button></form><script data-goatcounter="https://dedomenici.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script></body></html>`;
+<button type="submit">Enter</button></form><script data-goatcounter="https://dedomenici.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script><script id="gc-events">(function(){var PREFIX="rtc",queue=[],timer=0;function flush(){if(!window.goatcounter||typeof window.goatcounter.count!=="function")return false;while(queue.length)window.goatcounter.count(queue.shift());return true}function send(payload){queue.push(payload);if(flush())return;if(timer)return;var n=0;timer=setInterval(function(){n++;if(flush()||n>40){clearInterval(timer);timer=0}},250)}function track(name,title){send({path:PREFIX+"-click-"+name,title:title||name,event:true})}window.__gcTrack=track;if(document.querySelector(".err"))track("gate-fail","Password gate fail");document.addEventListener("submit",function(){track("gate-submit","Password gate submit")},true)})();</script></body></html>`;
   // Public (pre-gate) assets: gate styling + PWA manifest/icons/service worker so "Add to Home Screen" works.
   const pub = f => path.join(config.ROOT, 'public', f);
   app.get('/gate.css', (req, res) => res.sendFile(pub('gate.css')));
